@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -20,6 +20,7 @@ import (
 	"github.com/sftpgo/sdk"
 
 	"github.com/drakkan/sftpgo/v2/internal/kms"
+	"github.com/drakkan/sftpgo/v2/internal/util"
 )
 
 // Filesystem defines filesystem details
@@ -38,6 +39,7 @@ type Filesystem struct {
 // SetEmptySecrets sets the secrets to empty
 func (f *Filesystem) SetEmptySecrets() {
 	f.S3Config.AccessSecret = kms.NewEmptySecret()
+	f.S3Config.SSECustomerKey = kms.NewEmptySecret()
 	f.GCSConfig.Credentials = kms.NewEmptySecret()
 	f.AzBlobConfig.AccountKey = kms.NewEmptySecret()
 	f.AzBlobConfig.SASURL = kms.NewEmptySecret()
@@ -53,6 +55,9 @@ func (f *Filesystem) SetEmptySecrets() {
 func (f *Filesystem) SetEmptySecretsIfNil() {
 	if f.S3Config.AccessSecret == nil {
 		f.S3Config.AccessSecret = kms.NewEmptySecret()
+	}
+	if f.S3Config.SSECustomerKey == nil {
+		f.S3Config.SSECustomerKey = kms.NewEmptySecret()
 	}
 	if f.GCSConfig.Credentials == nil {
 		f.GCSConfig.Credentials = kms.NewEmptySecret()
@@ -89,6 +94,9 @@ func (f *Filesystem) SetEmptySecretsIfNil() {
 func (f *Filesystem) SetNilSecretsIfEmpty() {
 	if f.S3Config.AccessSecret != nil && f.S3Config.AccessSecret.IsEmpty() {
 		f.S3Config.AccessSecret = nil
+	}
+	if f.S3Config.SSECustomerKey != nil && f.S3Config.SSECustomerKey.IsEmpty() {
+		f.S3Config.SSECustomerKey = nil
 	}
 	if f.GCSConfig.Credentials != nil && f.GCSConfig.Credentials.IsEmpty() {
 		f.GCSConfig.Credentials = nil
@@ -232,8 +240,7 @@ func (f *Filesystem) Validate(additionalData string) error {
 		f.CryptConfig = CryptFsConfig{}
 		f.SFTPConfig = SFTPFsConfig{}
 		return nil
-	default:
-		f.Provider = sdk.LocalFilesystemProvider
+	case sdk.LocalFilesystemProvider:
 		f.S3Config = S3FsConfig{}
 		f.GCSConfig = GCSFsConfig{}
 		f.AzBlobConfig = AzBlobFsConfig{}
@@ -241,6 +248,11 @@ func (f *Filesystem) Validate(additionalData string) error {
 		f.SFTPConfig = SFTPFsConfig{}
 		f.HTTPConfig = HTTPFsConfig{}
 		return validateOSFsConfig(&f.OSConfig)
+	default:
+		return util.NewI18nError(
+			util.NewValidationError("invalid filesystem provider"),
+			util.I18nErrorFsValidation,
+		)
 	}
 }
 
@@ -249,6 +261,9 @@ func (f *Filesystem) HasRedactedSecret() bool {
 	// TODO move vfs specific code into each *FsConfig struct
 	switch f.Provider {
 	case sdk.S3FilesystemProvider:
+		if f.S3Config.SSECustomerKey.IsRedacted() {
+			return true
+		}
 		return f.S3Config.AccessSecret.IsRedacted()
 	case sdk.GCSFilesystemProvider:
 		return f.GCSConfig.Credentials.IsRedacted()
@@ -321,8 +336,10 @@ func (f *Filesystem) GetACopy() Filesystem {
 				DownloadPartMaxTime: f.S3Config.DownloadPartMaxTime,
 				UploadPartMaxTime:   f.S3Config.UploadPartMaxTime,
 				ForcePathStyle:      f.S3Config.ForcePathStyle,
+				SkipTLSVerify:       f.S3Config.SkipTLSVerify,
 			},
-			AccessSecret: f.S3Config.AccessSecret.Clone(),
+			AccessSecret:   f.S3Config.AccessSecret.Clone(),
+			SSECustomerKey: f.S3Config.SSECustomerKey.Clone(),
 		},
 		GCSConfig: GCSFsConfig{
 			BaseGCSFsConfig: sdk.BaseGCSFsConfig{

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -248,7 +248,7 @@ func (c *Config) loadTemplates(configDir string) error {
 	return nil
 }
 
-// Initialize initialized and validates the SMTP configuration
+// Initialize initializes and validates the SMTP configuration
 func (c *Config) Initialize(configDir string, isService bool) error {
 	if !isService && c.Host == "" {
 		if err := loadConfigFromProvider(); err != nil {
@@ -257,8 +257,11 @@ func (c *Config) Initialize(configDir string, isService bool) error {
 		if !config.isEnabled() {
 			return nil
 		}
+		// If not running as a service, templates will only be loaded if required.
 		return c.loadTemplates(configDir)
 	}
+	// In service mode SMTP can be enabled from the WebAdmin at runtime so we
+	// always load templates.
 	if err := c.loadTemplates(configDir); err != nil {
 		return err
 	}
@@ -319,9 +322,8 @@ func (c *Config) getMailClientOptions() []mail.Option {
 
 func (c *Config) getSMTPClientAndMsg(to, bcc []string, subject, body string, contentType EmailContentType,
 	attachments ...*mail.File) (*mail.Client, *mail.Msg, error) {
-	version := version.Get()
 	msg := mail.NewMsg()
-	msg.SetUserAgent(fmt.Sprintf("SFTPGo-%s-%s", version.Version, version.CommitHash))
+	msg.SetUserAgent(version.GetServerVersion(" ", false))
 
 	var from string
 	if c.From != "" {
@@ -343,7 +345,7 @@ func (c *Config) getSMTPClientAndMsg(to, bcc []string, subject, body string, con
 	msg.Subject(subject)
 	msg.SetDate()
 	msg.SetMessageID()
-	msg.SetAttachements(attachments)
+	msg.SetAttachments(attachments)
 
 	switch contentType {
 	case EmailContentTypeTextPlain:
@@ -411,12 +413,6 @@ func RenderPasswordExpirationTemplate(buf *bytes.Buffer, data any) error {
 // SendEmail tries to send an email using the specified parameters.
 func SendEmail(to, bcc []string, subject, body string, contentType EmailContentType, attachments ...*mail.File) error {
 	return config.sendEmail(to, bcc, subject, body, contentType, attachments...)
-}
-
-// ReloadProviderConf reloads the configuration from the provider
-// and apply it if different from the active one
-func ReloadProviderConf() {
-	loadConfigFromProvider() //nolint:errcheck
 }
 
 func loadConfigFromProvider() error {

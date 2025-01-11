@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -24,14 +24,17 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/drakkan/sftpgo/v2/internal/logger"
+	"github.com/drakkan/sftpgo/v2/internal/util"
 	"github.com/drakkan/sftpgo/v2/internal/version"
 	"github.com/drakkan/sftpgo/v2/internal/vfs"
 )
@@ -93,7 +96,7 @@ CREATE TABLE "{{users}}" ("id" integer NOT NULL PRIMARY KEY GENERATED ALWAYS AS 
 "download_bandwidth" integer NOT NULL, "last_login" bigint NOT NULL, "filters" text NULL, "filesystem" text NULL,
 "additional_info" text NULL, "created_at" bigint NOT NULL, "updated_at" bigint NOT NULL, "email" varchar(255) NULL,
 "upload_data_transfer" integer NOT NULL, "download_data_transfer" integer NOT NULL, "total_data_transfer" integer NOT NULL,
-"used_upload_data_transfer" integer NOT NULL, "used_download_data_transfer" integer NOT NULL, "deleted_at" bigint NOT NULL,
+"used_upload_data_transfer" bigint NOT NULL, "used_download_data_transfer" bigint NOT NULL, "deleted_at" bigint NOT NULL,
 "first_download" bigint NOT NULL, "first_upload" bigint NOT NULL, "last_password_change" bigint NOT NULL, "role_id" integer NULL);
 CREATE TABLE "{{groups_folders_mapping}}" ("id" integer NOT NULL PRIMARY KEY GENERATED ALWAYS AS IDENTITY, "group_id" integer NOT NULL,
 "folder_id" integer NOT NULL, "virtual_path" text NOT NULL, "quota_size" bigint NOT NULL, "quota_files" integer NOT NULL);
@@ -203,10 +206,14 @@ CREATE INDEX "{{prefix}}ip_lists_ipornet_idx" ON "{{ip_lists}}" ("ipornet");
 CREATE INDEX "{{prefix}}ip_lists_updated_at_idx" ON "{{ip_lists}}" ("updated_at");
 CREATE INDEX "{{prefix}}ip_lists_deleted_at_idx" ON "{{ip_lists}}" ("deleted_at");
 CREATE INDEX "{{prefix}}ip_lists_first_last_idx" ON "{{ip_lists}}" ("first", "last");
-INSERT INTO {{schema_version}} (version) VALUES (28);
+INSERT INTO {{schema_version}} (version) VALUES (29);
 `
 	// not supported in CockroachDB
 	ipListsLikeIndex = `CREATE INDEX "{{prefix}}ip_lists_ipornet_like_idx" ON "{{ip_lists}}" ("ipornet" varchar_pattern_ops);`
+)
+
+var (
+	pgSQLTargetSessionAttrs = []string{"any", "read-write", "read-only", "primary", "standby", "prefer-standby"}
 )
 
 // PGSQLProvider defines the auth provider for PostgreSQL database
@@ -299,7 +306,7 @@ func getPGSQLConnectionString(redactedPwd bool) string {
 		if config.DisableSNI {
 			connectionString += " sslsni=0"
 		}
-		if config.TargetSessionAttrs != "" {
+		if slices.Contains(pgSQLTargetSessionAttrs, config.TargetSessionAttrs) {
 			connectionString += fmt.Sprintf(" target_session_attrs='%s'", config.TargetSessionAttrs)
 		}
 	} else {
@@ -336,6 +343,14 @@ func (p *PGSQLProvider) getUsedQuota(username string) (int, int64, int64, int64,
 	return sqlCommonGetUsedQuota(username, p.dbHandle)
 }
 
+func (p *PGSQLProvider) getAdminSignature(username string) (string, error) {
+	return sqlCommonGetAdminSignature(username, p.dbHandle)
+}
+
+func (p *PGSQLProvider) getUserSignature(username string) (string, error) {
+	return sqlCommonGetUserSignature(username, p.dbHandle)
+}
+
 func (p *PGSQLProvider) setUpdatedAt(username string) {
 	sqlCommonSetUpdatedAt(username, p.dbHandle)
 }
@@ -353,11 +368,11 @@ func (p *PGSQLProvider) userExists(username, role string) (User, error) {
 }
 
 func (p *PGSQLProvider) addUser(user *User) error {
-	return sqlCommonAddUser(user, p.dbHandle)
+	return p.normalizeError(sqlCommonAddUser(user, p.dbHandle), fieldUsername)
 }
 
 func (p *PGSQLProvider) updateUser(user *User) error {
-	return sqlCommonUpdateUser(user, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateUser(user, p.dbHandle), -1)
 }
 
 func (p *PGSQLProvider) deleteUser(user User, softDelete bool) error {
@@ -399,7 +414,7 @@ func (p *PGSQLProvider) getFolderByName(name string) (vfs.BaseVirtualFolder, err
 }
 
 func (p *PGSQLProvider) addFolder(folder *vfs.BaseVirtualFolder) error {
-	return sqlCommonAddFolder(folder, p.dbHandle)
+	return p.normalizeError(sqlCommonAddFolder(folder, p.dbHandle), fieldName)
 }
 
 func (p *PGSQLProvider) updateFolder(folder *vfs.BaseVirtualFolder) error {
@@ -435,7 +450,7 @@ func (p *PGSQLProvider) groupExists(name string) (Group, error) {
 }
 
 func (p *PGSQLProvider) addGroup(group *Group) error {
-	return sqlCommonAddGroup(group, p.dbHandle)
+	return p.normalizeError(sqlCommonAddGroup(group, p.dbHandle), fieldName)
 }
 
 func (p *PGSQLProvider) updateGroup(group *Group) error {
@@ -455,11 +470,11 @@ func (p *PGSQLProvider) adminExists(username string) (Admin, error) {
 }
 
 func (p *PGSQLProvider) addAdmin(admin *Admin) error {
-	return sqlCommonAddAdmin(admin, p.dbHandle)
+	return p.normalizeError(sqlCommonAddAdmin(admin, p.dbHandle), fieldUsername)
 }
 
 func (p *PGSQLProvider) updateAdmin(admin *Admin) error {
-	return sqlCommonUpdateAdmin(admin, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateAdmin(admin, p.dbHandle), -1)
 }
 
 func (p *PGSQLProvider) deleteAdmin(admin Admin) error {
@@ -483,11 +498,11 @@ func (p *PGSQLProvider) apiKeyExists(keyID string) (APIKey, error) {
 }
 
 func (p *PGSQLProvider) addAPIKey(apiKey *APIKey) error {
-	return sqlCommonAddAPIKey(apiKey, p.dbHandle)
+	return p.normalizeError(sqlCommonAddAPIKey(apiKey, p.dbHandle), -1)
 }
 
 func (p *PGSQLProvider) updateAPIKey(apiKey *APIKey) error {
-	return sqlCommonUpdateAPIKey(apiKey, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateAPIKey(apiKey, p.dbHandle), -1)
 }
 
 func (p *PGSQLProvider) deleteAPIKey(apiKey APIKey) error {
@@ -511,11 +526,11 @@ func (p *PGSQLProvider) shareExists(shareID, username string) (Share, error) {
 }
 
 func (p *PGSQLProvider) addShare(share *Share) error {
-	return sqlCommonAddShare(share, p.dbHandle)
+	return p.normalizeError(sqlCommonAddShare(share, p.dbHandle), fieldName)
 }
 
 func (p *PGSQLProvider) updateShare(share *Share) error {
-	return sqlCommonUpdateShare(share, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateShare(share, p.dbHandle), -1)
 }
 
 func (p *PGSQLProvider) deleteShare(share Share) error {
@@ -615,7 +630,7 @@ func (p *PGSQLProvider) eventActionExists(name string) (BaseEventAction, error) 
 }
 
 func (p *PGSQLProvider) addEventAction(action *BaseEventAction) error {
-	return sqlCommonAddEventAction(action, p.dbHandle)
+	return p.normalizeError(sqlCommonAddEventAction(action, p.dbHandle), fieldName)
 }
 
 func (p *PGSQLProvider) updateEventAction(action *BaseEventAction) error {
@@ -643,7 +658,7 @@ func (p *PGSQLProvider) eventRuleExists(name string) (EventRule, error) {
 }
 
 func (p *PGSQLProvider) addEventRule(rule *EventRule) error {
-	return sqlCommonAddEventRule(rule, p.dbHandle)
+	return p.normalizeError(sqlCommonAddEventRule(rule, p.dbHandle), fieldName)
 }
 
 func (p *PGSQLProvider) updateEventRule(rule *EventRule) error {
@@ -695,7 +710,7 @@ func (p *PGSQLProvider) roleExists(name string) (Role, error) {
 }
 
 func (p *PGSQLProvider) addRole(role *Role) error {
-	return sqlCommonAddRole(role, p.dbHandle)
+	return p.normalizeError(sqlCommonAddRole(role, p.dbHandle), fieldName)
 }
 
 func (p *PGSQLProvider) updateRole(role *Role) error {
@@ -719,7 +734,7 @@ func (p *PGSQLProvider) ipListEntryExists(ipOrNet string, listType IPListType) (
 }
 
 func (p *PGSQLProvider) addIPListEntry(entry *IPListEntry) error {
-	return sqlCommonAddIPListEntry(entry, p.dbHandle)
+	return p.normalizeError(sqlCommonAddIPListEntry(entry, p.dbHandle), fieldIPNet)
 }
 
 func (p *PGSQLProvider) updateIPListEntry(entry *IPListEntry) error {
@@ -783,8 +798,8 @@ func (p *PGSQLProvider) initializeDatabase() error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return errSchemaVersionEmpty
 	}
-	logger.InfoToConsole("creating initial database schema, version 28")
-	providerLog(logger.LevelInfo, "creating initial database schema, version 28")
+	logger.InfoToConsole("creating initial database schema, version 29")
+	providerLog(logger.LevelInfo, "creating initial database schema, version 29")
 	var initialSQL string
 	if config.Driver == CockroachDataProviderName {
 		initialSQL = sqlReplaceAll(pgsqlInitial)
@@ -793,7 +808,7 @@ func (p *PGSQLProvider) initializeDatabase() error {
 		initialSQL = sqlReplaceAll(pgsqlInitial + ipListsLikeIndex)
 	}
 
-	return sqlCommonExecSQLAndUpdateDBVersion(p.dbHandle, []string{initialSQL}, 28, true)
+	return sqlCommonExecSQLAndUpdateDBVersion(p.dbHandle, []string{initialSQL}, 29, true)
 }
 
 func (p *PGSQLProvider) migrateDatabase() error { //nolint:dupl
@@ -806,8 +821,8 @@ func (p *PGSQLProvider) migrateDatabase() error { //nolint:dupl
 	case version == sqlDatabaseVersion:
 		providerLog(logger.LevelDebug, "sql database is up to date, current version: %d", version)
 		return ErrNoInitRequired
-	case version < 28:
-		err = fmt.Errorf("database schema version %d is too old, please see the upgrading docs", version)
+	case version < 29:
+		err = errSchemaVersionTooOld(version)
 		providerLog(logger.LevelError, "%v", err)
 		logger.ErrorToConsole("%v", err)
 		return err
@@ -841,4 +856,32 @@ func (p *PGSQLProvider) revertDatabase(targetVersion int) error {
 func (p *PGSQLProvider) resetDatabase() error {
 	sql := sqlReplaceAll(pgsqlResetSQL)
 	return sqlCommonExecSQLAndUpdateDBVersion(p.dbHandle, []string{sql}, 0, false)
+}
+
+func (p *PGSQLProvider) normalizeError(err error, fieldType int) error {
+	if err == nil {
+		return nil
+	}
+	var pgsqlErr *pgconn.PgError
+	if errors.As(err, &pgsqlErr) {
+		switch pgsqlErr.Code {
+		case "23505":
+			var message string
+			switch fieldType {
+			case fieldUsername:
+				message = util.I18nErrorDuplicatedUsername
+			case fieldIPNet:
+				message = util.I18nErrorDuplicatedIPNet
+			default:
+				message = util.I18nErrorDuplicatedName
+			}
+			return util.NewI18nError(
+				fmt.Errorf("%w: %s", ErrDuplicatedKey, err.Error()),
+				message,
+			)
+		case "23503":
+			return fmt.Errorf("%w: %s", ErrForeignKeyViolated, err.Error())
+		}
+	}
+	return err
 }

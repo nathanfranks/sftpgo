@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -16,6 +16,7 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -226,6 +227,13 @@ func TestTransferErrors(t *testing.T) {
 	conn := NewBaseConnection("id", ProtocolSFTP, "", "", u)
 	transfer := NewBaseTransfer(file, conn, nil, testFile, testFile, "/transfer_test_file", TransferUpload,
 		0, 0, 0, 0, true, fs, dataprovider.TransferQuota{})
+	pathError := &os.PathError{
+		Op:   "test",
+		Path: testFile,
+		Err:  os.ErrInvalid,
+	}
+	err = transfer.ConvertError(pathError)
+	assert.EqualError(t, err, fmt.Sprintf("%s %s: %s", pathError.Op, "/transfer_test_file", pathError.Err.Error()))
 	err = transfer.ConvertError(os.ErrNotExist)
 	assert.ErrorIs(t, err, sftp.ErrSSHFxNoSuchFile)
 	err = transfer.ConvertError(os.ErrPermission)
@@ -298,8 +306,9 @@ func TestRemovePartialCryptoFile(t *testing.T) {
 	require.NoError(t, err)
 	u := dataprovider.User{
 		BaseUser: sdk.BaseUser{
-			Username: "test",
-			HomeDir:  os.TempDir(),
+			Username:   "test",
+			HomeDir:    os.TempDir(),
+			QuotaFiles: 1000000,
 		},
 	}
 	conn := NewBaseConnection(fs.ConnectionID(), ProtocolSFTP, "", "", u)
@@ -315,6 +324,9 @@ func TestRemovePartialCryptoFile(t *testing.T) {
 	assert.Equal(t, int64(0), size)
 	assert.Equal(t, 1, deletedFiles)
 	assert.NoFileExists(t, testFile)
+	err = transfer.Close()
+	assert.Error(t, err)
+	assert.Len(t, conn.GetTransfers(), 0)
 }
 
 func TestFTPMode(t *testing.T) {
@@ -426,6 +438,11 @@ func TestTransferQuota(t *testing.T) {
 	}
 	err = transfer.CheckWrite()
 	assert.True(t, conn.IsQuotaExceededError(err))
+
+	err = transfer.Close()
+	assert.NoError(t, err)
+	assert.Len(t, conn.GetTransfers(), 0)
+	assert.Equal(t, int32(0), Connections.GetTotalTransfers())
 }
 
 func TestUploadOutsideHomeRenameError(t *testing.T) {

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -19,8 +19,6 @@ import (
 	"errors"
 	"sync"
 	"time"
-
-	"github.com/rs/xid"
 
 	"github.com/drakkan/sftpgo/v2/internal/dataprovider"
 	"github.com/drakkan/sftpgo/v2/internal/kms"
@@ -54,7 +52,7 @@ type oauth2PendingAuth struct {
 
 func newOAuth2PendingAuth(provider int, redirectURL, clientID string, clientSecret *kms.Secret) oauth2PendingAuth {
 	return oauth2PendingAuth{
-		State:        xid.New().String(),
+		State:        util.GenerateOpaqueString(),
 		Provider:     provider,
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
@@ -105,7 +103,6 @@ func (o *memoryOAuth2Manager) getPendingAuth(state string) (oauth2PendingAuth, e
 }
 
 func (o *memoryOAuth2Manager) cleanup() {
-	logger.Debug(logSender, "", "oauth2 manager cleanup")
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -165,6 +162,5 @@ func (o *dbOAuth2Manager) decodePendingAuthData(data any) (oauth2PendingAuth, er
 }
 
 func (o *dbOAuth2Manager) cleanup() {
-	logger.Debug(logSender, "", "oauth2 manager cleanup")
 	dataprovider.CleanupSharedSessions(dataprovider.SessionTypeOAuth2Auth, time.Now()) //nolint:errcheck
 }

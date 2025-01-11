@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -250,6 +250,7 @@ func TestTransfersCheckerDiskQuota(t *testing.T) {
 	Connections.Remove(fakeConn5.GetID())
 	stats := Connections.GetStats("")
 	assert.Len(t, stats, 0)
+	assert.Equal(t, int32(0), Connections.GetTotalTransfers())
 
 	err = dataprovider.DeleteUser(user.Username, "", "", "")
 	assert.NoError(t, err)
@@ -314,7 +315,7 @@ func TestTransferCheckerTransferQuota(t *testing.T) {
 	transfer1.BytesReceived.Store(1024*1024 + 1)
 	transfer2.BytesReceived.Store(0)
 	Connections.checkTransfers()
-	assert.True(t, conn1.IsQuotaExceededError(transfer1.errAbort))
+	assert.True(t, conn1.IsQuotaExceededError(transfer1.errAbort), transfer1.errAbort)
 	assert.Nil(t, transfer2.errAbort)
 	transfer1.errAbort = nil
 	transfer1.BytesReceived.Store(1024*1024 + 1)
@@ -368,11 +369,16 @@ func TestTransferCheckerTransferQuota(t *testing.T) {
 	if assert.Error(t, transfer4.errAbort) {
 		assert.Contains(t, transfer4.errAbort.Error(), ErrReadQuotaExceeded.Error())
 	}
+	err = transfer3.Close()
+	assert.NoError(t, err)
+	err = transfer4.Close()
+	assert.NoError(t, err)
 
 	Connections.Remove(fakeConn3.GetID())
 	Connections.Remove(fakeConn4.GetID())
 	stats := Connections.GetStats("")
 	assert.Len(t, stats, 0)
+	assert.Equal(t, int32(0), Connections.GetTotalTransfers())
 
 	err = dataprovider.DeleteUser(user.Username, "", "", "")
 	assert.NoError(t, err)

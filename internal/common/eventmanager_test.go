@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -344,6 +344,16 @@ func TestDoubleStarMatching(t *testing.T) {
 	res = checkEventConditionPattern(c, "/mydir/sub/dir/file.txt")
 	assert.True(t, res)
 
+	c.Pattern = "/**/*.filepart"
+	res = checkEventConditionPattern(c, "/file.filepart")
+	assert.True(t, res)
+	res = checkEventConditionPattern(c, "/mydir/sub/file.filepart")
+	assert.True(t, res)
+	res = checkEventConditionPattern(c, "/file.txt")
+	assert.False(t, res)
+	res = checkEventConditionPattern(c, "/mydir/file.txt")
+	assert.False(t, res)
+
 	c.Pattern = "/mydir/**/*.txt"
 	res = checkEventConditionPattern(c, "/mydir")
 	assert.False(t, res)
@@ -595,9 +605,10 @@ func TestEventManagerErrors(t *testing.T) {
 	assert.Error(t, err)
 	err = executeTransferQuotaResetRuleAction(dataprovider.ConditionOptions{}, &EventParams{})
 	assert.Error(t, err)
-	err = executeMetadataCheckRuleAction(dataprovider.ConditionOptions{}, &EventParams{})
-	assert.Error(t, err)
 	err = executeUserExpirationCheckRuleAction(dataprovider.ConditionOptions{}, &EventParams{})
+	assert.Error(t, err)
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{},
+		dataprovider.ConditionOptions{}, &EventParams{}, time.Time{})
 	assert.Error(t, err)
 	err = executeDeleteFsRuleAction(nil, nil, dataprovider.ConditionOptions{}, &EventParams{})
 	assert.Error(t, err)
@@ -621,15 +632,6 @@ func TestEventManagerErrors(t *testing.T) {
 
 	groupName := "agroup"
 	err = executeQuotaResetForUser(&dataprovider.User{
-		Groups: []sdk.GroupMapping{
-			{
-				Name: groupName,
-				Type: sdk.GroupTypePrimary,
-			},
-		},
-	})
-	assert.Error(t, err)
-	err = executeMetadataCheckForUser(&dataprovider.User{
 		Groups: []sdk.GroupMapping{
 			{
 				Name: groupName,
@@ -796,6 +798,28 @@ func TestEventManagerErrors(t *testing.T) {
 	err = dataprovider.Initialize(providerConf, configDir, true)
 	assert.NoError(t, err)
 	stopEventScheduler()
+}
+
+func TestDateTimePlaceholder(t *testing.T) {
+	oldTZ := Config.TZ
+
+	Config.TZ = ""
+	dateTime := time.Now()
+	params := EventParams{
+		Timestamp: dateTime,
+	}
+	replacements := params.getStringReplacements(false, false)
+	r := strings.NewReplacer(replacements...)
+	res := r.Replace("{{DateTime}}")
+	assert.Equal(t, dateTime.UTC().Format(dateTimeMillisFormat), res)
+
+	Config.TZ = "local"
+	replacements = params.getStringReplacements(false, false)
+	r = strings.NewReplacer(replacements...)
+	res = r.Replace("{{DateTime}}")
+	assert.Equal(t, dateTime.Local().Format(dateTimeMillisFormat), res)
+
+	Config.TZ = oldTZ
 }
 
 func TestEventRuleActions(t *testing.T) {
@@ -976,40 +1000,6 @@ func TestEventRuleActions(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, getErrorString(err), "no user quota reset executed")
-
-	action = dataprovider.BaseEventAction{
-		Type: dataprovider.ActionTypeMetadataCheck,
-	}
-
-	err = executeRuleAction(action, &EventParams{}, dataprovider.ConditionOptions{
-		Names: []dataprovider.ConditionPattern{
-			{
-				Pattern: "don't match",
-			},
-		},
-	})
-	assert.Error(t, err)
-	assert.Contains(t, getErrorString(err), "no metadata check executed")
-
-	err = executeRuleAction(action, &EventParams{}, dataprovider.ConditionOptions{
-		Names: []dataprovider.ConditionPattern{
-			{
-				Pattern: username1,
-			},
-		},
-	})
-	assert.NoError(t, err)
-	// simulate another metadata check in progress
-	assert.True(t, ActiveMetadataChecks.Add(username1, ""))
-	err = executeRuleAction(action, &EventParams{}, dataprovider.ConditionOptions{
-		Names: []dataprovider.ConditionPattern{
-			{
-				Pattern: username1,
-			},
-		},
-	})
-	assert.Error(t, err)
-	assert.True(t, ActiveMetadataChecks.Remove(username1))
 
 	action = dataprovider.BaseEventAction{
 		Type: dataprovider.ActionTypeUserExpirationCheck,
@@ -1198,10 +1188,12 @@ func TestEventRuleActions(t *testing.T) {
 	action.Options = dataprovider.BaseEventActionOptions{
 		FsConfig: dataprovider.EventActionFilesystemConfig{
 			Type: dataprovider.FilesystemActionRename,
-			Renames: []dataprovider.KeyValue{
+			Renames: []dataprovider.RenameConfig{
 				{
-					Key:   "/source",
-					Value: "/target",
+					KeyValue: dataprovider.KeyValue{
+						Key:   "/source",
+						Value: "/target",
+					},
 				},
 			},
 		},
@@ -1418,6 +1410,31 @@ func TestIDPAccountCheckRule(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, username, user.Username)
 	assert.Equal(t, 1, user.Status)
+	assert.Empty(t, user.Password)
+	assert.Len(t, user.PublicKeys, 0)
+	assert.Len(t, user.Filters.TLSCerts, 0)
+	assert.Empty(t, user.Email)
+	assert.Empty(t, user.Description)
+	// Update the profile attribute and make sure they are preserved
+	user.Password = "secret"
+	user.Email = "example@example.com"
+	user.Filters.AdditionalEmails = []string{"alias@example.com"}
+	user.Description = "some desc"
+	user.Filters.TLSCerts = []string{serverCert}
+	user.PublicKeys = []string{"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC03jj0D+djk7pxIf/0OhrxrchJTRZklofJ1NoIu4752Sq02mdXmarMVsqJ1cAjV5LBVy3D1F5U6XW4rppkXeVtd04Pxb09ehtH0pRRPaoHHlALiJt8CoMpbKYMA8b3KXPPriGxgGomvtU2T2RMURSwOZbMtpsugfjYSWenyYX+VORYhylWnSXL961LTyC21ehd6d6QnW9G7E5hYMITMY9TuQZz3bROYzXiTsgN0+g6Hn7exFQp50p45StUMfV/SftCMdCxlxuyGny2CrN/vfjO7xxOo2uv7q1qm10Q46KPWJQv+pgZ/OfL+EDjy07n5QVSKHlbx+2nT4Q0EgOSQaCTYwn3YjtABfIxWwgAFdyj6YlPulCL22qU4MYhDcA6PSBwDdf8hvxBfvsiHdM+JcSHvv8/VeJhk6CmnZxGY0fxBupov27z3yEO8nAg8k+6PaUiW1MSUfuGMF/ktB8LOstXsEPXSszuyXiOv4DaryOXUiSn7bmRqKcEFlJusO6aZP0= nicola@p1"}
+	err = dataprovider.UpdateUser(user, "", "", "")
+	assert.NoError(t, err)
+
+	user, err = executeUserCheckAction(c, params)
+	assert.NoError(t, err)
+	assert.Equal(t, username, user.Username)
+	assert.Equal(t, 1, user.Status)
+	assert.NotEmpty(t, user.Password)
+	assert.Len(t, user.PublicKeys, 1)
+	assert.Len(t, user.Filters.TLSCerts, 1)
+	assert.NotEmpty(t, user.Email)
+	assert.Len(t, user.Filters.AdditionalEmails, 1)
+	assert.NotEmpty(t, user.Description)
 
 	err = dataprovider.DeleteUser(username, "", "", "")
 	assert.NoError(t, err)
@@ -1540,10 +1557,6 @@ func TestEventRuleActionsNoGroupMatching(t *testing.T) {
 	err = executeUsersQuotaResetRuleAction(conditions, &EventParams{})
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "no user quota reset executed")
-	}
-	err = executeMetadataCheckRuleAction(conditions, &EventParams{})
-	if assert.Error(t, err) {
-		assert.Contains(t, err.Error(), "no metadata check executed")
 	}
 	err = executeTransferQuotaResetRuleAction(conditions, &EventParams{})
 	if assert.Error(t, err) {
@@ -1722,10 +1735,12 @@ func TestFilesystemActionErrors(t *testing.T) {
 	assert.NoError(t, err)
 	err = dataprovider.AddUser(&user, "", "", "")
 	assert.NoError(t, err)
-	err = executeRenameFsActionForUser([]dataprovider.KeyValue{
+	err = executeRenameFsActionForUser([]dataprovider.RenameConfig{
 		{
-			Key:   "/p1",
-			Value: "/p1",
+			KeyValue: dataprovider.KeyValue{
+				Key:   "/p1",
+				Value: "/p1",
+			},
 		},
 	}, testReplacer, user)
 	if assert.Error(t, err) {
@@ -1736,10 +1751,12 @@ func TestFilesystemActionErrors(t *testing.T) {
 		Options: dataprovider.BaseEventActionOptions{
 			FsConfig: dataprovider.EventActionFilesystemConfig{
 				Type: dataprovider.FilesystemActionRename,
-				Renames: []dataprovider.KeyValue{
+				Renames: []dataprovider.RenameConfig{
 					{
-						Key:   "/p2",
-						Value: "/p2",
+						KeyValue: dataprovider.KeyValue{
+							Key:   "/p2",
+							Value: "/p2",
+						},
 					},
 				},
 			},
@@ -1825,10 +1842,18 @@ func TestFilesystemActionErrors(t *testing.T) {
 			Writer:  zip.NewWriter(bytes.NewBuffer(nil)),
 			Entries: map[string]bool{},
 		}
-		err = addZipEntry(wr, conn, "/adir/sub/f.dat", "/adir/sub/sub")
+		err = addZipEntry(wr, conn, "/adir/sub/f.dat", "/adir/sub/sub", nil, 0)
 		assert.Error(t, err)
 		assert.Contains(t, getErrorString(err), "is outside base dir")
 	}
+
+	wr := &zipWriterWrapper{
+		Name:    xid.New().String() + ".zip",
+		Writer:  zip.NewWriter(bytes.NewBuffer(nil)),
+		Entries: map[string]bool{},
+	}
+	err = addZipEntry(wr, conn, "/p1", "/", nil, 2000)
+	assert.ErrorIs(t, err, util.ErrRecursionTooDeep)
 
 	err = dataprovider.DeleteUser(username, "", "", "")
 	assert.NoError(t, err)
@@ -1994,6 +2019,7 @@ func TestEventParamsCopy(t *testing.T) {
 	params := EventParams{
 		Name:            "name",
 		Event:           "event",
+		Extension:       "ext",
 		Status:          1,
 		errors:          []string{"error1"},
 		retentionChecks: []executedRetentionCheck{},
@@ -2283,4 +2309,174 @@ func TestMetadataReplacement(t *testing.T) {
 	data, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, `{"key":"value"} {\"key\":\"value\"}`, string(data))
+}
+
+func TestUserInactivityCheck(t *testing.T) {
+	username1 := "user1"
+	username2 := "user2"
+	user1 := dataprovider.User{
+		BaseUser: sdk.BaseUser{
+			Username: username1,
+			HomeDir:  filepath.Join(os.TempDir(), username1),
+			Status:   1,
+			Permissions: map[string][]string{
+				"/": {dataprovider.PermAny},
+			},
+		},
+	}
+	user2 := dataprovider.User{
+		BaseUser: sdk.BaseUser{
+			Username: username2,
+			HomeDir:  filepath.Join(os.TempDir(), username2),
+			Status:   1,
+			Permissions: map[string][]string{
+				"/": {dataprovider.PermAny},
+			},
+		},
+	}
+	days := user1.InactivityDays(time.Now().Add(10*24*time.Hour + 5*time.Second))
+	assert.Equal(t, 0, days)
+
+	user2.LastLogin = util.GetTimeAsMsSinceEpoch(time.Now())
+	err := executeInactivityCheckForUser(&user2, dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+	}, time.Now().Add(12*24*time.Hour))
+	assert.Error(t, err)
+	user2.LastLogin = util.GetTimeAsMsSinceEpoch(time.Now())
+	err = executeInactivityCheckForUser(&user2, dataprovider.EventActionUserInactivity{
+		DeleteThreshold: 10,
+	}, time.Now().Add(12*24*time.Hour))
+	assert.Error(t, err)
+
+	err = dataprovider.AddUser(&user1, "", "", "")
+	assert.NoError(t, err)
+	err = dataprovider.AddUser(&user2, "", "", "")
+	assert.NoError(t, err)
+	user1, err = dataprovider.UserExists(username1, "")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, user1.Status)
+	days = user1.InactivityDays(time.Now().Add(10*24*time.Hour + 5*time.Second))
+	assert.Equal(t, 10, days)
+	days = user1.InactivityDays(time.Now().Add(-10*24*time.Hour + 5*time.Second))
+	assert.Equal(t, -9, days)
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: "not matching",
+			},
+		},
+	}, &EventParams{}, time.Now().Add(12*24*time.Hour))
+	assert.NoError(t, err)
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now())
+	assert.NoError(t, err) // no action
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now().Add(-12*24*time.Hour))
+	assert.NoError(t, err) // no action
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+		DeleteThreshold:  20,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now().Add(30*24*time.Hour))
+	// both thresholds exceeded, the user will be disabled
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "executed inactivity check actions for users")
+	}
+	user1, err = dataprovider.UserExists(username1, "")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, user1.Status)
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now().Add(30*24*time.Hour))
+	assert.NoError(t, err) // already disabled, no action
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+		DeleteThreshold:  20,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now().Add(-30*24*time.Hour))
+	assert.NoError(t, err)
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+		DeleteThreshold:  20,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now())
+	assert.NoError(t, err)
+	user1, err = dataprovider.UserExists(username1, "")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, user1.Status)
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DisableThreshold: 10,
+		DeleteThreshold:  20,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user1.Username,
+			},
+		},
+	}, &EventParams{}, time.Now().Add(30*24*time.Hour)) // the user is disabled, will be now deleted
+	assert.Error(t, err)
+	_, err = dataprovider.UserExists(username1, "")
+	assert.ErrorIs(t, err, util.ErrNotFound)
+
+	err = executeUserInactivityCheckRuleAction(dataprovider.EventActionUserInactivity{
+		DeleteThreshold: 20,
+	}, dataprovider.ConditionOptions{
+		Names: []dataprovider.ConditionPattern{
+			{
+				Pattern: user2.Username,
+			},
+		},
+	}, &EventParams{}, time.Now().Add(30*24*time.Hour)) // no disable threshold, user deleted
+	assert.Error(t, err)
+	_, err = dataprovider.UserExists(username2, "")
+	assert.ErrorIs(t, err, util.ErrNotFound)
+
+	err = dataprovider.DeleteUser(username1, "", "", "")
+	assert.Error(t, err)
+	err = dataprovider.DeleteUser(username2, "", "", "")
+	assert.Error(t, err)
 }

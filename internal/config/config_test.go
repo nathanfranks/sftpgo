@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 
 	"github.com/sftpgo/sdk/kms"
@@ -31,14 +31,12 @@ import (
 	"github.com/drakkan/sftpgo/v2/internal/common"
 	"github.com/drakkan/sftpgo/v2/internal/config"
 	"github.com/drakkan/sftpgo/v2/internal/dataprovider"
-	"github.com/drakkan/sftpgo/v2/internal/ftpd"
 	"github.com/drakkan/sftpgo/v2/internal/httpclient"
 	"github.com/drakkan/sftpgo/v2/internal/httpd"
 	"github.com/drakkan/sftpgo/v2/internal/mfa"
 	"github.com/drakkan/sftpgo/v2/internal/plugin"
 	"github.com/drakkan/sftpgo/v2/internal/sftpd"
 	"github.com/drakkan/sftpgo/v2/internal/smtp"
-	"github.com/drakkan/sftpgo/v2/internal/util"
 	"github.com/drakkan/sftpgo/v2/internal/webdavd"
 )
 
@@ -68,11 +66,11 @@ func TestLoadConfigTest(t *testing.T) {
 	confName := tempConfigName + ".json" //nolint:goconst
 	configFilePath := filepath.Join(configDir, confName)
 	err = config.LoadConfig(configDir, confName)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	err = os.WriteFile(configFilePath, []byte("{invalid json}"), os.ModePerm)
 	assert.NoError(t, err)
 	err = config.LoadConfig(configDir, confName)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	err = os.WriteFile(configFilePath, []byte(`{"sftpd": {"max_auth_tries": "a"}}`), os.ModePerm)
 	assert.NoError(t, err)
 	err = config.LoadConfig(configDir, confName)
@@ -124,42 +122,6 @@ func TestReadEnvFiles(t *testing.T) {
 	os.RemoveAll(envd)
 }
 
-func TestEmptyBanner(t *testing.T) {
-	reset()
-
-	confName := tempConfigName + ".json"
-	configFilePath := filepath.Join(configDir, confName)
-	err := config.LoadConfig(configDir, "")
-	assert.NoError(t, err)
-	sftpdConf := config.GetSFTPDConfig()
-	sftpdConf.Banner = " "
-	c := make(map[string]sftpd.Configuration)
-	c["sftpd"] = sftpdConf
-	jsonConf, _ := json.Marshal(c)
-	err = os.WriteFile(configFilePath, jsonConf, os.ModePerm)
-	assert.NoError(t, err)
-	err = config.LoadConfig(configDir, confName)
-	assert.NoError(t, err)
-	sftpdConf = config.GetSFTPDConfig()
-	assert.NotEmpty(t, strings.TrimSpace(sftpdConf.Banner))
-	err = os.Remove(configFilePath)
-	assert.NoError(t, err)
-
-	ftpdConf := config.GetFTPDConfig()
-	ftpdConf.Banner = " "
-	c1 := make(map[string]ftpd.Configuration)
-	c1["ftpd"] = ftpdConf
-	jsonConf, _ = json.Marshal(c1)
-	err = os.WriteFile(configFilePath, jsonConf, os.ModePerm)
-	assert.NoError(t, err)
-	err = config.LoadConfig(configDir, confName)
-	assert.NoError(t, err)
-	ftpdConf = config.GetFTPDConfig()
-	assert.NotEmpty(t, strings.TrimSpace(ftpdConf.Banner))
-	err = os.Remove(configFilePath)
-	assert.NoError(t, err)
-}
-
 func TestEnabledSSHCommands(t *testing.T) {
 	reset()
 
@@ -184,28 +146,6 @@ func TestEnabledSSHCommands(t *testing.T) {
 	if assert.Len(t, sftpdConf.EnabledSSHCommands, 1) {
 		assert.Equal(t, "scp", sftpdConf.EnabledSSHCommands[0])
 	}
-	err = os.Remove(configFilePath)
-	assert.NoError(t, err)
-}
-
-func TestInvalidUploadMode(t *testing.T) {
-	reset()
-
-	confName := tempConfigName + ".json"
-	configFilePath := filepath.Join(configDir, confName)
-	err := config.LoadConfig(configDir, "")
-	assert.NoError(t, err)
-	commonConf := config.GetCommonConfig()
-	commonConf.UploadMode = 10
-	c := make(map[string]common.Configuration)
-	c["common"] = commonConf
-	jsonConf, err := json.Marshal(c)
-	assert.NoError(t, err)
-	err = os.WriteFile(configFilePath, jsonConf, os.ModePerm)
-	assert.NoError(t, err)
-	err = config.LoadConfig(configDir, confName)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, config.GetCommonConfig().UploadMode)
 	err = os.Remove(configFilePath)
 	assert.NoError(t, err)
 }
@@ -299,6 +239,26 @@ func TestInvalidInstallationHint(t *testing.T) {
 	httpdConfig = config.GetHTTPDConfig()
 	assert.Equal(t, "abc", httpdConfig.Setup.InstallationCode)
 	assert.Equal(t, "Installation code", httpdConfig.Setup.InstallationCodeHint)
+	err = os.Remove(configFilePath)
+	assert.NoError(t, err)
+}
+
+func TestInvalidRenameMode(t *testing.T) {
+	reset()
+
+	confName := tempConfigName + ".json"
+	configFilePath := filepath.Join(configDir, confName)
+	commonConfig := config.GetCommonConfig()
+	commonConfig.RenameMode = 10
+	c := make(map[string]any)
+	c["common"] = commonConfig
+	jsonConf, err := json.Marshal(c)
+	assert.NoError(t, err)
+	err = os.WriteFile(configFilePath, jsonConf, os.ModePerm)
+	assert.NoError(t, err)
+	err = config.LoadConfig(configDir, confName)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, config.GetCommonConfig().RenameMode)
 	err = os.Remove(configFilePath)
 	assert.NoError(t, err)
 }
@@ -635,20 +595,18 @@ func TestHTTPDSubObjectsFromEnv(t *testing.T) {
 
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__SECURITY__HTTPS_PROXY_HEADERS__0__KEY", "X-Forwarded-Proto")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__SECURITY__HTTPS_PROXY_HEADERS__0__VALUE", "https")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__WEB_CLIENT_INTEGRATIONS__0__URL", "http://127.0.0.1/")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__WEB_CLIENT_INTEGRATIONS__0__FILE_EXTENSIONS", ".pdf, .txt")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_ID", "client_id")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_SECRET", "client_secret")
+	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_SECRET_FILE", "client_secret_file")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CONFIG_URL", "config_url")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__REDIRECT_BASE_URL", "redirect_base_url")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__USERNAME_FIELD", "email")
 	cleanup := func() {
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__SECURITY__HTTPS_PROXY_HEADERS__0__KEY")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__SECURITY__HTTPS_PROXY_HEADERS__0__VALUE")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__WEB_CLIENT_INTEGRATIONS__0__URL")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__WEB_CLIENT_INTEGRATIONS__0__FILE_EXTENSIONS")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_ID")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_SECRET")
+		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_SECRET_FILE")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CONFIG_URL")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__REDIRECT_BASE_URL")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__USERNAME_FIELD")
@@ -660,9 +618,9 @@ func TestHTTPDSubObjectsFromEnv(t *testing.T) {
 	httpdConf := config.GetHTTPDConfig()
 	require.Len(t, httpdConf.Bindings, 1)
 	require.Len(t, httpdConf.Bindings[0].Security.HTTPSProxyHeaders, 1)
-	require.Len(t, httpdConf.Bindings[0].WebClientIntegrations, 1)
 	require.Equal(t, "client_id", httpdConf.Bindings[0].OIDC.ClientID)
 	require.Equal(t, "client_secret", httpdConf.Bindings[0].OIDC.ClientSecret)
+	require.Equal(t, "client_secret_file", httpdConf.Bindings[0].OIDC.ClientSecretFile)
 	require.Equal(t, "config_url", httpdConf.Bindings[0].OIDC.ConfigURL)
 	require.Equal(t, "redirect_base_url", httpdConf.Bindings[0].OIDC.RedirectBaseURL)
 	require.Equal(t, "email", httpdConf.Bindings[0].OIDC.UsernameField)
@@ -678,7 +636,6 @@ func TestHTTPDSubObjectsFromEnv(t *testing.T) {
 	assert.NoError(t, err)
 
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__SECURITY__HTTPS_PROXY_HEADERS__0__VALUE", "http")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__WEB_CLIENT_INTEGRATIONS__0__URL", "http://127.0.1.1/")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__0__OIDC__CLIENT_SECRET", "new_client_secret")
 	err = config.LoadConfig(configDir, confName)
 	assert.NoError(t, err)
@@ -686,8 +643,6 @@ func TestHTTPDSubObjectsFromEnv(t *testing.T) {
 	require.Len(t, httpdConf.Bindings, 1)
 	require.Len(t, httpdConf.Bindings[0].Security.HTTPSProxyHeaders, 1)
 	require.Equal(t, "http", httpdConf.Bindings[0].Security.HTTPSProxyHeaders[0].Value)
-	require.Len(t, httpdConf.Bindings[0].WebClientIntegrations, 1)
-	require.Equal(t, "http://127.0.1.1/", httpdConf.Bindings[0].WebClientIntegrations[0].URL)
 	require.Equal(t, "client_id", httpdConf.Bindings[0].OIDC.ClientID)
 	require.Equal(t, "new_client_secret", httpdConf.Bindings[0].OIDC.ClientSecret)
 	require.Equal(t, "config_url", httpdConf.Bindings[0].OIDC.ConfigURL)
@@ -715,6 +670,9 @@ func TestPluginsFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_PLUGINS__0__KMS_OPTIONS__SCHEME", kms.SchemeAWS)
 	os.Setenv("SFTPGO_PLUGINS__0__KMS_OPTIONS__ENCRYPTED_STATUS", kms.SecretStatusAWS)
 	os.Setenv("SFTPGO_PLUGINS__0__AUTH_OPTIONS__SCOPE", "14")
+	os.Setenv("SFTPGO_PLUGINS__0__ENV_PREFIX", "prefix_")
+	os.Setenv("SFTPGO_PLUGINS__0__ENV_VARS", "a, b")
+
 	t.Cleanup(func() {
 		os.Unsetenv("SFTPGO_PLUGINS__0__TYPE")
 		os.Unsetenv("SFTPGO_PLUGINS__0__NOTIFIER_OPTIONS__FS_EVENTS")
@@ -730,6 +688,8 @@ func TestPluginsFromEnv(t *testing.T) {
 		os.Unsetenv("SFTPGO_PLUGINS__0__KMS_OPTIONS__SCHEME")
 		os.Unsetenv("SFTPGO_PLUGINS__0__KMS_OPTIONS__ENCRYPTED_STATUS")
 		os.Unsetenv("SFTPGO_PLUGINS__0__AUTH_OPTIONS__SCOPE")
+		os.Unsetenv("SFTPGO_PLUGINS__0__ENV_PREFIX")
+		os.Unsetenv("SFTPGO_PLUGINS__0__ENV_VARS")
 	})
 
 	err := config.LoadConfig(configDir, "")
@@ -739,8 +699,8 @@ func TestPluginsFromEnv(t *testing.T) {
 	pluginConf := pluginsConf[0]
 	require.Equal(t, "notifier", pluginConf.Type)
 	require.Len(t, pluginConf.NotifierOptions.FsEvents, 2)
-	require.True(t, util.Contains(pluginConf.NotifierOptions.FsEvents, "upload"))
-	require.True(t, util.Contains(pluginConf.NotifierOptions.FsEvents, "download"))
+	require.True(t, slices.Contains(pluginConf.NotifierOptions.FsEvents, "upload"))
+	require.True(t, slices.Contains(pluginConf.NotifierOptions.FsEvents, "download"))
 	require.Len(t, pluginConf.NotifierOptions.ProviderEvents, 2)
 	require.Equal(t, "add", pluginConf.NotifierOptions.ProviderEvents[0])
 	require.Equal(t, "update", pluginConf.NotifierOptions.ProviderEvents[1])
@@ -761,6 +721,10 @@ func TestPluginsFromEnv(t *testing.T) {
 	require.Equal(t, kms.SchemeAWS, pluginConf.KMSOptions.Scheme)
 	require.Equal(t, kms.SecretStatusAWS, pluginConf.KMSOptions.EncryptedStatus)
 	require.Equal(t, 14, pluginConf.AuthOptions.Scope)
+	require.Equal(t, "prefix_", pluginConf.EnvPrefix)
+	require.Len(t, pluginConf.EnvVars, 2)
+	assert.Equal(t, "a", pluginConf.EnvVars[0])
+	assert.Equal(t, "b", pluginConf.EnvVars[1])
 
 	cfg := make(map[string]any)
 	cfg["plugins"] = pluginConf
@@ -776,6 +740,8 @@ func TestPluginsFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_PLUGINS__0__AUTO_MTLS", "0")
 	os.Setenv("SFTPGO_PLUGINS__0__KMS_OPTIONS__SCHEME", kms.SchemeVaultTransit)
 	os.Setenv("SFTPGO_PLUGINS__0__KMS_OPTIONS__ENCRYPTED_STATUS", kms.SecretStatusVaultTransit)
+	os.Setenv("SFTPGO_PLUGINS__0__ENV_PREFIX", "")
+	os.Setenv("SFTPGO_PLUGINS__0__ENV_VARS", "")
 	err = config.LoadConfig(configDir, confName)
 	assert.NoError(t, err)
 	pluginsConf = config.GetPluginsConfig()
@@ -783,8 +749,8 @@ func TestPluginsFromEnv(t *testing.T) {
 	pluginConf = pluginsConf[0]
 	require.Equal(t, "notifier", pluginConf.Type)
 	require.Len(t, pluginConf.NotifierOptions.FsEvents, 2)
-	require.True(t, util.Contains(pluginConf.NotifierOptions.FsEvents, "upload"))
-	require.True(t, util.Contains(pluginConf.NotifierOptions.FsEvents, "download"))
+	require.True(t, slices.Contains(pluginConf.NotifierOptions.FsEvents, "upload"))
+	require.True(t, slices.Contains(pluginConf.NotifierOptions.FsEvents, "download"))
 	require.Len(t, pluginConf.NotifierOptions.ProviderEvents, 2)
 	require.Equal(t, "add", pluginConf.NotifierOptions.ProviderEvents[0])
 	require.Equal(t, "update", pluginConf.NotifierOptions.ProviderEvents[1])
@@ -800,6 +766,8 @@ func TestPluginsFromEnv(t *testing.T) {
 	require.Equal(t, kms.SchemeVaultTransit, pluginConf.KMSOptions.Scheme)
 	require.Equal(t, kms.SecretStatusVaultTransit, pluginConf.KMSOptions.EncryptedStatus)
 	require.Equal(t, 14, pluginConf.AuthOptions.Scope)
+	assert.Empty(t, pluginConf.EnvPrefix)
+	assert.Len(t, pluginConf.EnvVars, 0)
 
 	err = os.Remove(configFilePath)
 	assert.NoError(t, err)
@@ -839,8 +807,8 @@ func TestRateLimitersFromEnv(t *testing.T) {
 	require.Equal(t, 2, limiters[0].Type)
 	protocols := limiters[0].Protocols
 	require.Len(t, protocols, 2)
-	require.True(t, util.Contains(protocols, common.ProtocolFTP))
-	require.True(t, util.Contains(protocols, common.ProtocolSSH))
+	require.True(t, slices.Contains(protocols, common.ProtocolFTP))
+	require.True(t, slices.Contains(protocols, common.ProtocolSSH))
 	require.True(t, limiters[0].GenerateDefenderEvents)
 	require.Equal(t, 50, limiters[0].EntriesSoftLimit)
 	require.Equal(t, 100, limiters[0].EntriesHardLimit)
@@ -851,10 +819,10 @@ func TestRateLimitersFromEnv(t *testing.T) {
 	require.Equal(t, 2, limiters[1].Type)
 	protocols = limiters[1].Protocols
 	require.Len(t, protocols, 4)
-	require.True(t, util.Contains(protocols, common.ProtocolFTP))
-	require.True(t, util.Contains(protocols, common.ProtocolSSH))
-	require.True(t, util.Contains(protocols, common.ProtocolWebDAV))
-	require.True(t, util.Contains(protocols, common.ProtocolHTTP))
+	require.True(t, slices.Contains(protocols, common.ProtocolFTP))
+	require.True(t, slices.Contains(protocols, common.ProtocolSSH))
+	require.True(t, slices.Contains(protocols, common.ProtocolWebDAV))
+	require.True(t, slices.Contains(protocols, common.ProtocolHTTP))
 	require.False(t, limiters[1].GenerateDefenderEvents)
 	require.Equal(t, 100, limiters[1].EntriesSoftLimit)
 	require.Equal(t, 150, limiters[1].EntriesHardLimit)
@@ -978,6 +946,7 @@ func TestFTPDBindingsFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_FTPD__BINDINGS__9__CLIENT_AUTH_TYPE", "2")
 	os.Setenv("SFTPGO_FTPD__BINDINGS__9__DEBUG", "1")
 	os.Setenv("SFTPGO_FTPD__BINDINGS__9__ACTIVE_CONNECTIONS_SECURITY", "1")
+	os.Setenv("SFTPGO_FTPD__BINDINGS__9__IGNORE_ASCII_TRANSFER_TYPE", "1")
 	os.Setenv("SFTPGO_FTPD__BINDINGS__9__CERTIFICATE_FILE", "cert.crt")
 	os.Setenv("SFTPGO_FTPD__BINDINGS__9__CERTIFICATE_KEY_FILE", "cert.key")
 
@@ -1002,6 +971,7 @@ func TestFTPDBindingsFromEnv(t *testing.T) {
 		os.Unsetenv("SFTPGO_FTPD__BINDINGS__9__CLIENT_AUTH_TYPE")
 		os.Unsetenv("SFTPGO_FTPD__BINDINGS__9__DEBUG")
 		os.Unsetenv("SFTPGO_FTPD__BINDINGS__9__ACTIVE_CONNECTIONS_SECURITY")
+		os.Unsetenv("SFTPGO_FTPD__BINDINGS__9__IGNORE_ASCII_TRANSFER_TYPE")
 		os.Unsetenv("SFTPGO_FTPD__BINDINGS__9__CERTIFICATE_FILE")
 		os.Unsetenv("SFTPGO_FTPD__BINDINGS__9__CERTIFICATE_KEY_FILE")
 	})
@@ -1026,6 +996,7 @@ func TestFTPDBindingsFromEnv(t *testing.T) {
 	require.False(t, bindings[0].Debug)
 	require.Equal(t, 1, bindings[0].PassiveConnectionsSecurity)
 	require.Equal(t, 0, bindings[0].ActiveConnectionsSecurity)
+	require.Equal(t, 0, bindings[0].IgnoreASCIITransferType)
 	require.Equal(t, 2203, bindings[1].Port)
 	require.Equal(t, "127.0.1.1", bindings[1].Address)
 	require.True(t, bindings[1].ApplyProxyConfig) // default value
@@ -1043,6 +1014,7 @@ func TestFTPDBindingsFromEnv(t *testing.T) {
 	require.Nil(t, bindings[1].TLSCipherSuites)
 	require.Equal(t, 0, bindings[1].PassiveConnectionsSecurity)
 	require.Equal(t, 1, bindings[1].ActiveConnectionsSecurity)
+	require.Equal(t, 1, bindings[1].IgnoreASCIITransferType)
 	require.True(t, bindings[1].Debug)
 	require.Equal(t, "cert.crt", bindings[1].CertificateFile)
 	require.Equal(t, "cert.key", bindings[1].CertificateKeyFile)
@@ -1121,6 +1093,8 @@ func TestWebDAVBindingsFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__PORT", "8000")
 	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__ENABLE_HTTPS", "0")
 	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__TLS_CIPHER_SUITES", "TLS_RSA_WITH_AES_128_CBC_SHA ")
+	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__TLS_PROTOCOLS", "http/1.1 ")
+	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__PROXY_MODE", "1")
 	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__PROXY_ALLOWED", "192.168.10.1")
 	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__CLIENT_IP_PROXY_HEADER", "X-Forwarded-For")
 	os.Setenv("SFTPGO_WEBDAVD__BINDINGS__1__CLIENT_IP_HEADER_DEPTH", "2")
@@ -1139,6 +1113,8 @@ func TestWebDAVBindingsFromEnv(t *testing.T) {
 		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__PORT")
 		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__ENABLE_HTTPS")
 		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__TLS_CIPHER_SUITES")
+		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__TLS_PROTOCOLS")
+		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__PROXY_MODE")
 		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__PROXY_ALLOWED")
 		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__CLIENT_IP_PROXY_HEADER")
 		os.Unsetenv("SFTPGO_WEBDAVD__BINDINGS__1__CLIENT_IP_HEADER_DEPTH")
@@ -1162,6 +1138,8 @@ func TestWebDAVBindingsFromEnv(t *testing.T) {
 	require.False(t, bindings[0].EnableHTTPS)
 	require.Equal(t, 12, bindings[0].MinTLSVersion)
 	require.Len(t, bindings[0].TLSCipherSuites, 0)
+	require.Len(t, bindings[0].Protocols, 0)
+	require.Equal(t, 0, bindings[0].ProxyMode)
 	require.Empty(t, bindings[0].Prefix)
 	require.Equal(t, 0, bindings[0].ClientIPHeaderDepth)
 	require.False(t, bindings[0].DisableWWWAuthHeader)
@@ -1172,6 +1150,9 @@ func TestWebDAVBindingsFromEnv(t *testing.T) {
 	require.Equal(t, 0, bindings[1].ClientAuthType)
 	require.Len(t, bindings[1].TLSCipherSuites, 1)
 	require.Equal(t, "TLS_RSA_WITH_AES_128_CBC_SHA", bindings[1].TLSCipherSuites[0])
+	require.Len(t, bindings[1].Protocols, 1)
+	assert.Equal(t, "http/1.1", bindings[1].Protocols[0])
+	require.Equal(t, 1, bindings[1].ProxyMode)
 	require.Equal(t, "192.168.10.1", bindings[1].ProxyAllowed[0])
 	require.Equal(t, "X-Forwarded-For", bindings[1].ClientIPProxyHeader)
 	require.Equal(t, 2, bindings[1].ClientIPHeaderDepth)
@@ -1182,6 +1163,7 @@ func TestWebDAVBindingsFromEnv(t *testing.T) {
 	require.True(t, bindings[2].EnableHTTPS)
 	require.Equal(t, 13, bindings[2].MinTLSVersion)
 	require.Equal(t, 1, bindings[2].ClientAuthType)
+	require.Equal(t, 0, bindings[2].ProxyMode)
 	require.Nil(t, bindings[2].TLSCipherSuites)
 	require.Equal(t, "/dav2", bindings[2].Prefix)
 	require.Equal(t, "webdav.crt", bindings[2].CertificateFile)
@@ -1211,18 +1193,17 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__ENABLE_REST_API", "0")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__ENABLED_LOGIN_METHODS", "3")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__RENDER_OPENAPI", "0")
+	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__LANGUAGES", "en,es")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__ENABLE_HTTPS", "1 ")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__MIN_TLS_VERSION", "13")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__CLIENT_AUTH_TYPE", "1")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__TLS_CIPHER_SUITES", " TLS_AES_256_GCM_SHA384 , TLS_CHACHA20_POLY1305_SHA256")
+	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__TLS_PROTOCOLS", "h2, http/1.1")
+	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__PROXY_MODE", "1")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__PROXY_ALLOWED", " 192.168.9.1 , 172.16.25.0/24")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__CLIENT_IP_PROXY_HEADER", "X-Real-IP")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__CLIENT_IP_HEADER_DEPTH", "2")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__HIDE_LOGIN_URL", "3")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__1__URL", "http://127.0.0.1/")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__1__FILE_EXTENSIONS", ".pdf, .txt")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__2__URL", "http://127.0.1.1/")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__3__FILE_EXTENSIONS", ".jpg, .txt")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__OIDC__CLIENT_ID", "client id")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__OIDC__CLIENT_SECRET", "client secret")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__OIDC__CONFIG_URL", "config url")
@@ -1249,12 +1230,11 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__CONTENT_SECURITY_POLICY", "script-src $NONCE")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__PERMISSIONS_POLICY", "fullscreen=(), geolocation=()")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__CROSS_ORIGIN_OPENER_POLICY", "same-origin")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__EXPECT_CT_HEADER", `max-age=86400, enforce, report-uri="https://foo.example/report"`)
+	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__CACHE_CONTROL", "private")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__EXTRA_CSS__0__PATH", "path1")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__EXTRA_CSS__1__PATH", "path2")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_ADMIN__FAVICON_PATH", "favicon.ico")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_CLIENT__LOGO_PATH", "logo.png")
-	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_ADMIN__LOGIN_IMAGE_PATH", "login_image.png")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_CLIENT__DISCLAIMER_NAME", "disclaimer")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_ADMIN__DISCLAIMER_PATH", "disclaimer.html")
 	os.Setenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_CLIENT__DEFAULT_CSS", "default.css")
@@ -1282,16 +1262,15 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__ENABLE_REST_API")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__ENABLED_LOGIN_METHODS")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__RENDER_OPENAPI")
+		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__LANGUAGES")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__CLIENT_AUTH_TYPE")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__TLS_CIPHER_SUITES")
+		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__TLS_PROTOCOLS")
+		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__PROXY_MODE")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__PROXY_ALLOWED")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__CLIENT_IP_PROXY_HEADER")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__CLIENT_IP_HEADER_DEPTH")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__HIDE_LOGIN_URL")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__1__URL")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__1__FILE_EXTENSIONS")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__2__URL")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__WEB_CLIENT_INTEGRATIONS__3__FILE_EXTENSIONS")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__OIDC__CLIENT_ID")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__OIDC__CLIENT_SECRET")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__OIDC__CONFIG_URL")
@@ -1318,12 +1297,11 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__CONTENT_SECURITY_POLICY")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__PERMISSIONS_POLICY")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__CROSS_ORIGIN_OPENER_POLICY")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__EXPECT_CT_HEADER")
+		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__SECURITY__CACHE_CONTROL")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__EXTRA_CSS__0__PATH")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__EXTRA_CSS__1__PATH")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_ADMIN__FAVICON_PATH")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_CLIENT__LOGO_PATH")
-		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_ADMIN__LOGIN_IMAGE_PATH")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_CLIENT__DISCLAIMER_NAME")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_ADMIN__DISCLAIMER_PATH")
 		os.Unsetenv("SFTPGO_HTTPD__BINDINGS__2__BRANDING__WEB_CLIENT__DEFAULT_CSS")
@@ -1339,13 +1317,17 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	require.Equal(t, 0, bindings[0].Port)
 	require.Equal(t, sockPath, bindings[0].Address)
 	require.False(t, bindings[0].EnableHTTPS)
+	require.Len(t, bindings[0].Protocols, 0)
 	require.Equal(t, 12, bindings[0].MinTLSVersion)
 	require.True(t, bindings[0].EnableWebAdmin)
 	require.True(t, bindings[0].EnableWebClient)
 	require.True(t, bindings[0].EnableRESTAPI)
 	require.Equal(t, 0, bindings[0].EnabledLoginMethods)
 	require.True(t, bindings[0].RenderOpenAPI)
+	require.Len(t, bindings[0].Languages, 1)
+	assert.Contains(t, bindings[0].Languages, "en")
 	require.Len(t, bindings[0].TLSCipherSuites, 1)
+	require.Equal(t, 0, bindings[0].ProxyMode)
 	require.Empty(t, bindings[0].OIDC.ConfigURL)
 	require.Equal(t, "TLS_AES_128_GCM_SHA256", bindings[0].TLSCipherSuites[0])
 	require.Equal(t, 0, bindings[0].HideLoginURL)
@@ -1363,6 +1345,8 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	require.True(t, bindings[1].EnableRESTAPI)
 	require.Equal(t, 0, bindings[1].EnabledLoginMethods)
 	require.True(t, bindings[1].RenderOpenAPI)
+	require.Len(t, bindings[1].Languages, 1)
+	assert.Contains(t, bindings[1].Languages, "en")
 	require.Nil(t, bindings[1].TLSCipherSuites)
 	require.Equal(t, 1, bindings[1].HideLoginURL)
 	require.Empty(t, bindings[1].OIDC.ClientID)
@@ -1372,6 +1356,7 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	require.False(t, bindings[1].Security.Enabled)
 	require.Equal(t, "Web Admin", bindings[1].Branding.WebAdmin.Name)
 	require.Equal(t, "WebClient", bindings[1].Branding.WebClient.ShortName)
+	require.Equal(t, 0, bindings[1].ProxyMode)
 	require.Equal(t, 0, bindings[1].ClientIPHeaderDepth)
 	require.Equal(t, 9000, bindings[2].Port)
 	require.Equal(t, "127.0.1.1", bindings[2].Address)
@@ -1382,19 +1367,23 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	require.False(t, bindings[2].EnableRESTAPI)
 	require.Equal(t, 3, bindings[2].EnabledLoginMethods)
 	require.False(t, bindings[2].RenderOpenAPI)
+	require.Len(t, bindings[2].Languages, 2)
+	assert.Contains(t, bindings[2].Languages, "en")
+	assert.Contains(t, bindings[2].Languages, "es")
 	require.Equal(t, 1, bindings[2].ClientAuthType)
 	require.Len(t, bindings[2].TLSCipherSuites, 2)
 	require.Equal(t, "TLS_AES_256_GCM_SHA384", bindings[2].TLSCipherSuites[0])
 	require.Equal(t, "TLS_CHACHA20_POLY1305_SHA256", bindings[2].TLSCipherSuites[1])
+	require.Len(t, bindings[2].Protocols, 2)
+	require.Equal(t, "h2", bindings[2].Protocols[0])
+	require.Equal(t, "http/1.1", bindings[2].Protocols[1])
+	require.Equal(t, 1, bindings[2].ProxyMode)
 	require.Len(t, bindings[2].ProxyAllowed, 2)
 	require.Equal(t, "192.168.9.1", bindings[2].ProxyAllowed[0])
 	require.Equal(t, "172.16.25.0/24", bindings[2].ProxyAllowed[1])
 	require.Equal(t, "X-Real-IP", bindings[2].ClientIPProxyHeader)
 	require.Equal(t, 2, bindings[2].ClientIPHeaderDepth)
 	require.Equal(t, 3, bindings[2].HideLoginURL)
-	require.Len(t, bindings[2].WebClientIntegrations, 1)
-	require.Equal(t, "http://127.0.0.1/", bindings[2].WebClientIntegrations[0].URL)
-	require.Equal(t, []string{".pdf", ".txt"}, bindings[2].WebClientIntegrations[0].FileExtensions)
 	require.Equal(t, "client id", bindings[2].OIDC.ClientID)
 	require.Equal(t, "client secret", bindings[2].OIDC.ClientSecret)
 	require.Equal(t, "config url", bindings[2].OIDC.ConfigURL)
@@ -1428,13 +1417,12 @@ func TestHTTPDBindingsFromEnv(t *testing.T) {
 	require.Equal(t, "script-src $NONCE", bindings[2].Security.ContentSecurityPolicy)
 	require.Equal(t, "fullscreen=(), geolocation=()", bindings[2].Security.PermissionsPolicy)
 	require.Equal(t, "same-origin", bindings[2].Security.CrossOriginOpenerPolicy)
-	require.Equal(t, `max-age=86400, enforce, report-uri="https://foo.example/report"`, bindings[2].Security.ExpectCTHeader)
+	require.Equal(t, "private", bindings[2].Security.CacheControl)
 	require.Equal(t, "favicon.ico", bindings[2].Branding.WebAdmin.FaviconPath)
 	require.Equal(t, "logo.png", bindings[2].Branding.WebClient.LogoPath)
-	require.Equal(t, "login_image.png", bindings[2].Branding.WebAdmin.LoginImagePath)
 	require.Equal(t, "disclaimer", bindings[2].Branding.WebClient.DisclaimerName)
 	require.Equal(t, "disclaimer.html", bindings[2].Branding.WebAdmin.DisclaimerPath)
-	require.Equal(t, "default.css", bindings[2].Branding.WebClient.DefaultCSS)
+	require.Equal(t, []string{"default.css"}, bindings[2].Branding.WebClient.DefaultCSS)
 	require.Len(t, bindings[2].Branding.WebClient.ExtraCSS, 2)
 	require.Equal(t, "1.css", bindings[2].Branding.WebClient.ExtraCSS[0])
 	require.Equal(t, "2.css", bindings[2].Branding.WebClient.ExtraCSS[1])
@@ -1584,6 +1572,7 @@ func TestConfigFromEnv(t *testing.T) {
 	os.Setenv("SFTPGO_KMS__SECRETS__URL", "local")
 	os.Setenv("SFTPGO_KMS__SECRETS__MASTER_KEY_PATH", "path")
 	os.Setenv("SFTPGO_TELEMETRY__TLS_CIPHER_SUITES", "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA")
+	os.Setenv("SFTPGO_TELEMETRY__TLS_PROTOCOLS", "h2")
 	os.Setenv("SFTPGO_HTTPD__SETUP__INSTALLATION_CODE", "123")
 	os.Setenv("SFTPGO_ACME__HTTP01_CHALLENGE__PORT", "5002")
 	t.Cleanup(func() {
@@ -1596,10 +1585,11 @@ func TestConfigFromEnv(t *testing.T) {
 		os.Unsetenv("SFTPGO_KMS__SECRETS__URL")
 		os.Unsetenv("SFTPGO_KMS__SECRETS__MASTER_KEY_PATH")
 		os.Unsetenv("SFTPGO_TELEMETRY__TLS_CIPHER_SUITES")
+		os.Unsetenv("SFTPGO_TELEMETRY__TLS_PROTOCOLS")
 		os.Unsetenv("SFTPGO_HTTPD__SETUP__INSTALLATION_CODE")
 		os.Unsetenv("SFTPGO_ACME__HTTP01_CHALLENGE_PORT")
 	})
-	err := config.LoadConfig(".", "invalid config")
+	err := config.LoadConfig(configDir, "")
 	assert.NoError(t, err)
 	sftpdConfig := config.GetSFTPDConfig()
 	assert.Equal(t, "127.0.0.1", sftpdConfig.Bindings[0].Address)
@@ -1614,9 +1604,11 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "local", kmsConfig.Secrets.URL)
 	assert.Equal(t, "path", kmsConfig.Secrets.MasterKeyPath)
 	telemetryConfig := config.GetTelemetryConfig()
-	assert.Len(t, telemetryConfig.TLSCipherSuites, 2)
+	require.Len(t, telemetryConfig.TLSCipherSuites, 2)
 	assert.Equal(t, "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", telemetryConfig.TLSCipherSuites[0])
 	assert.Equal(t, "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", telemetryConfig.TLSCipherSuites[1])
+	require.Len(t, telemetryConfig.Protocols, 1)
+	assert.Equal(t, "h2", telemetryConfig.Protocols[0])
 	assert.Equal(t, "123", config.GetHTTPDConfig().Setup.InstallationCode)
 	acmeConfig := config.GetACMEConfig()
 	assert.Equal(t, 5002, acmeConfig.HTTP01Challenge.Port)

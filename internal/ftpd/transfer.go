@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -32,7 +32,7 @@ type transfer struct {
 	expectedOffset int64
 }
 
-func newTransfer(baseTransfer *common.BaseTransfer, pipeWriter *vfs.PipeWriter, pipeReader *vfs.PipeReader,
+func newTransfer(baseTransfer *common.BaseTransfer, pipeWriter vfs.PipeWriter, pipeReader vfs.PipeReader,
 	expectedOffset int64) *transfer {
 	var writer io.WriteCloser
 	var reader io.ReadCloser
@@ -101,7 +101,7 @@ func (t *transfer) Seek(offset int64, whence int) (int64, error) {
 		}
 		return ret, err
 	}
-	if t.reader != nil && t.expectedOffset == offset && whence == io.SeekStart {
+	if (t.reader != nil || t.writer != nil) && t.expectedOffset == offset && whence == io.SeekStart {
 		return offset, nil
 	}
 	t.TransferError(errors.New("seek is unsupported for this transfer"))

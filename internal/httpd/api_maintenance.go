@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -160,7 +160,7 @@ func loadData(w http.ResponseWriter, r *http.Request) {
 	}
 	fi, err := os.Stat(inputFile)
 	if err != nil {
-		sendAPIResponse(w, r, err, "", getRespStatus(err))
+		sendAPIResponse(w, r, fmt.Errorf("invalid input_file %q", inputFile), "", http.StatusBadRequest)
 		return
 	}
 	if fi.Size() > MaxRestoreSize {
@@ -171,7 +171,7 @@ func loadData(w http.ResponseWriter, r *http.Request) {
 
 	content, err := os.ReadFile(inputFile)
 	if err != nil {
-		sendAPIResponse(w, r, err, "", getRespStatus(err))
+		sendAPIResponse(w, r, fmt.Errorf("invalid input_file %q", inputFile), "", http.StatusBadRequest)
 		return
 	}
 	if err := restoreBackup(content, inputFile, scanQuota, mode, claims.Username, util.GetIPFromRemoteAddress(r.RemoteAddr), claims.Role); err != nil {
@@ -184,7 +184,10 @@ func loadData(w http.ResponseWriter, r *http.Request) {
 func restoreBackup(content []byte, inputFile string, scanQuota, mode int, executor, ipAddress, role string) error {
 	dump, err := dataprovider.ParseDumpData(content)
 	if err != nil {
-		return util.NewValidationError(fmt.Sprintf("unable to parse backup content: %v", err))
+		return util.NewI18nError(
+			util.NewValidationError(fmt.Sprintf("invalid input_file %q", inputFile)),
+			util.I18nErrorBackupFile,
+		)
 	}
 
 	if err = RestoreConfigs(dump.Configs, mode, executor, ipAddress, role); err != nil {
@@ -548,9 +551,10 @@ func RestoreUsers(users []dataprovider.User, inputFile string, mode, scanQuota i
 			return fmt.Errorf("unable to restore user %q: %w", user.Username, err)
 		}
 		if scanQuota == 1 || (scanQuota == 2 && user.HasQuotaRestrictions()) {
-			if common.QuotaScans.AddUserQuotaScan(user.Username, user.Role) {
+			user, err = dataprovider.GetUserWithGroupSettings(user.Username, "")
+			if err == nil && common.QuotaScans.AddUserQuotaScan(user.Username, user.Role) {
 				logger.Debug(logSender, "", "starting quota scan for restored user: %q", user.Username)
-				go doUserQuotaScan(user) //nolint:errcheck
+				go doUserQuotaScan(&user) //nolint:errcheck
 			}
 		}
 	}

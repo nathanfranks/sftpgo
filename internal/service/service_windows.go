@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -38,7 +38,7 @@ import (
 
 const (
 	serviceName     = "SFTPGo"
-	serviceDesc     = "Fully featured and highly configurable SFTP server with optional FTP/S and WebDAV support"
+	serviceDesc     = "Full-featured and highly configurable file transfer server"
 	rotateLogCmd    = svc.Cmd(128)
 	acceptRotateLog = svc.Accepted(rotateLogCmd)
 )

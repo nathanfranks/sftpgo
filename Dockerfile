@@ -1,8 +1,8 @@
-FROM golang:1.21-bookworm as builder
+FROM golang:1.23-bookworm AS builder
 
 ENV GOFLAGS="-mod=readonly"
 
-RUN apt-get update && apt-get -y upgrade && apt-get install --no-install-recommends -y openssh-server && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /workspace
 WORKDIR /workspace
@@ -10,7 +10,7 @@ WORKDIR /workspace
 ARG GOPROXY
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download && go mod verify
 
 ARG COMMIT_SHA
 
@@ -47,7 +47,6 @@ RUN groupadd --system -g 1000 sftpgo && \
     --comment "SFTPGo user" --uid 1000 sftpgo
 
 COPY --from=builder /workspace/sftpgo.json /etc/sftpgo/sftpgo.json
-COPY --from=builder /etc/ssh/moduli /etc/sftpgo/moduli
 COPY --from=builder /workspace/templates /usr/share/sftpgo/templates
 COPY --from=builder /workspace/static /usr/share/sftpgo/static
 COPY --from=builder /workspace/openapi /usr/share/sftpgo/openapi

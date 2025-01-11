@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -32,6 +32,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/drakkan/sftpgo/v2/internal/logger"
+	"github.com/drakkan/sftpgo/v2/internal/util"
 	"github.com/drakkan/sftpgo/v2/internal/version"
 	"github.com/drakkan/sftpgo/v2/internal/vfs"
 )
@@ -94,8 +95,8 @@ const (
 		"`last_login` bigint NOT NULL, `filters` longtext NULL, `filesystem` longtext NULL, `additional_info` longtext NULL, " +
 		"`created_at` bigint NOT NULL, `updated_at` bigint NOT NULL, `email` varchar(255) NULL, " +
 		"`upload_data_transfer` integer NOT NULL, `download_data_transfer` integer NOT NULL, " +
-		"`total_data_transfer` integer NOT NULL, `used_upload_data_transfer` integer NOT NULL, " +
-		"`used_download_data_transfer` integer NOT NULL, `deleted_at` bigint NOT NULL, `first_download` bigint NOT NULL, " +
+		"`total_data_transfer` integer NOT NULL, `used_upload_data_transfer` bigint NOT NULL, " +
+		"`used_download_data_transfer` bigint NOT NULL, `deleted_at` bigint NOT NULL, `first_download` bigint NOT NULL, " +
 		"`first_upload` bigint NOT NULL, `last_password_change` bigint NOT NULL, `role_id` integer NULL);" +
 		"CREATE TABLE `{{groups_folders_mapping}}` (`id` integer AUTO_INCREMENT NOT NULL PRIMARY KEY, " +
 		"`group_id` integer NOT NULL, `folder_id` integer NOT NULL, " +
@@ -192,7 +193,7 @@ const (
 		"CREATE INDEX `{{prefix}}ip_lists_updated_at_idx` ON `{{ip_lists}}` (`updated_at`);" +
 		"CREATE INDEX `{{prefix}}ip_lists_deleted_at_idx` ON `{{ip_lists}}` (`deleted_at`);" +
 		"CREATE INDEX `{{prefix}}ip_lists_first_last_idx` ON `{{ip_lists}}` (`first`, `last`);" +
-		"INSERT INTO {{schema_version}} (version) VALUES (28);"
+		"INSERT INTO {{schema_version}} (version) VALUES (29);"
 )
 
 // MySQLProvider defines the auth provider for MySQL/MariaDB database
@@ -324,6 +325,14 @@ func (p *MySQLProvider) getUsedQuota(username string) (int, int64, int64, int64,
 	return sqlCommonGetUsedQuota(username, p.dbHandle)
 }
 
+func (p *MySQLProvider) getAdminSignature(username string) (string, error) {
+	return sqlCommonGetAdminSignature(username, p.dbHandle)
+}
+
+func (p *MySQLProvider) getUserSignature(username string) (string, error) {
+	return sqlCommonGetUserSignature(username, p.dbHandle)
+}
+
 func (p *MySQLProvider) setUpdatedAt(username string) {
 	sqlCommonSetUpdatedAt(username, p.dbHandle)
 }
@@ -341,11 +350,11 @@ func (p *MySQLProvider) userExists(username, role string) (User, error) {
 }
 
 func (p *MySQLProvider) addUser(user *User) error {
-	return sqlCommonAddUser(user, p.dbHandle)
+	return p.normalizeError(sqlCommonAddUser(user, p.dbHandle), fieldUsername)
 }
 
 func (p *MySQLProvider) updateUser(user *User) error {
-	return sqlCommonUpdateUser(user, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateUser(user, p.dbHandle), -1)
 }
 
 func (p *MySQLProvider) deleteUser(user User, softDelete bool) error {
@@ -387,7 +396,7 @@ func (p *MySQLProvider) getFolderByName(name string) (vfs.BaseVirtualFolder, err
 }
 
 func (p *MySQLProvider) addFolder(folder *vfs.BaseVirtualFolder) error {
-	return sqlCommonAddFolder(folder, p.dbHandle)
+	return p.normalizeError(sqlCommonAddFolder(folder, p.dbHandle), fieldName)
 }
 
 func (p *MySQLProvider) updateFolder(folder *vfs.BaseVirtualFolder) error {
@@ -423,7 +432,7 @@ func (p *MySQLProvider) groupExists(name string) (Group, error) {
 }
 
 func (p *MySQLProvider) addGroup(group *Group) error {
-	return sqlCommonAddGroup(group, p.dbHandle)
+	return p.normalizeError(sqlCommonAddGroup(group, p.dbHandle), fieldName)
 }
 
 func (p *MySQLProvider) updateGroup(group *Group) error {
@@ -443,11 +452,11 @@ func (p *MySQLProvider) adminExists(username string) (Admin, error) {
 }
 
 func (p *MySQLProvider) addAdmin(admin *Admin) error {
-	return sqlCommonAddAdmin(admin, p.dbHandle)
+	return p.normalizeError(sqlCommonAddAdmin(admin, p.dbHandle), fieldUsername)
 }
 
 func (p *MySQLProvider) updateAdmin(admin *Admin) error {
-	return sqlCommonUpdateAdmin(admin, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateAdmin(admin, p.dbHandle), -1)
 }
 
 func (p *MySQLProvider) deleteAdmin(admin Admin) error {
@@ -471,11 +480,11 @@ func (p *MySQLProvider) apiKeyExists(keyID string) (APIKey, error) {
 }
 
 func (p *MySQLProvider) addAPIKey(apiKey *APIKey) error {
-	return sqlCommonAddAPIKey(apiKey, p.dbHandle)
+	return p.normalizeError(sqlCommonAddAPIKey(apiKey, p.dbHandle), -1)
 }
 
 func (p *MySQLProvider) updateAPIKey(apiKey *APIKey) error {
-	return sqlCommonUpdateAPIKey(apiKey, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateAPIKey(apiKey, p.dbHandle), -1)
 }
 
 func (p *MySQLProvider) deleteAPIKey(apiKey APIKey) error {
@@ -499,11 +508,11 @@ func (p *MySQLProvider) shareExists(shareID, username string) (Share, error) {
 }
 
 func (p *MySQLProvider) addShare(share *Share) error {
-	return sqlCommonAddShare(share, p.dbHandle)
+	return p.normalizeError(sqlCommonAddShare(share, p.dbHandle), fieldName)
 }
 
 func (p *MySQLProvider) updateShare(share *Share) error {
-	return sqlCommonUpdateShare(share, p.dbHandle)
+	return p.normalizeError(sqlCommonUpdateShare(share, p.dbHandle), -1)
 }
 
 func (p *MySQLProvider) deleteShare(share Share) error {
@@ -603,7 +612,7 @@ func (p *MySQLProvider) eventActionExists(name string) (BaseEventAction, error) 
 }
 
 func (p *MySQLProvider) addEventAction(action *BaseEventAction) error {
-	return sqlCommonAddEventAction(action, p.dbHandle)
+	return p.normalizeError(sqlCommonAddEventAction(action, p.dbHandle), fieldName)
 }
 
 func (p *MySQLProvider) updateEventAction(action *BaseEventAction) error {
@@ -631,7 +640,7 @@ func (p *MySQLProvider) eventRuleExists(name string) (EventRule, error) {
 }
 
 func (p *MySQLProvider) addEventRule(rule *EventRule) error {
-	return sqlCommonAddEventRule(rule, p.dbHandle)
+	return p.normalizeError(sqlCommonAddEventRule(rule, p.dbHandle), fieldName)
 }
 
 func (p *MySQLProvider) updateEventRule(rule *EventRule) error {
@@ -683,7 +692,7 @@ func (p *MySQLProvider) roleExists(name string) (Role, error) {
 }
 
 func (p *MySQLProvider) addRole(role *Role) error {
-	return sqlCommonAddRole(role, p.dbHandle)
+	return p.normalizeError(sqlCommonAddRole(role, p.dbHandle), fieldName)
 }
 
 func (p *MySQLProvider) updateRole(role *Role) error {
@@ -707,7 +716,7 @@ func (p *MySQLProvider) ipListEntryExists(ipOrNet string, listType IPListType) (
 }
 
 func (p *MySQLProvider) addIPListEntry(entry *IPListEntry) error {
-	return sqlCommonAddIPListEntry(entry, p.dbHandle)
+	return p.normalizeError(sqlCommonAddIPListEntry(entry, p.dbHandle), fieldIPNet)
 }
 
 func (p *MySQLProvider) updateIPListEntry(entry *IPListEntry) error {
@@ -771,11 +780,11 @@ func (p *MySQLProvider) initializeDatabase() error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return errSchemaVersionEmpty
 	}
-	logger.InfoToConsole("creating initial database schema, version 28")
-	providerLog(logger.LevelInfo, "creating initial database schema, version 28")
+	logger.InfoToConsole("creating initial database schema, version 29")
+	providerLog(logger.LevelInfo, "creating initial database schema, version 29")
 	initialSQL := sqlReplaceAll(mysqlInitialSQL)
 
-	return sqlCommonExecSQLAndUpdateDBVersion(p.dbHandle, strings.Split(initialSQL, ";"), 28, true)
+	return sqlCommonExecSQLAndUpdateDBVersion(p.dbHandle, strings.Split(initialSQL, ";"), 29, true)
 }
 
 func (p *MySQLProvider) migrateDatabase() error {
@@ -788,8 +797,8 @@ func (p *MySQLProvider) migrateDatabase() error {
 	case version == sqlDatabaseVersion:
 		providerLog(logger.LevelDebug, "sql database is up to date, current version: %d", version)
 		return ErrNoInitRequired
-	case version < 28:
-		err = fmt.Errorf("database schema version %d is too old, please see the upgrading docs", version)
+	case version < 29:
+		err = errSchemaVersionTooOld(version)
 		providerLog(logger.LevelError, "%v", err)
 		logger.ErrorToConsole("%v", err)
 		return err
@@ -823,4 +832,32 @@ func (p *MySQLProvider) revertDatabase(targetVersion int) error {
 func (p *MySQLProvider) resetDatabase() error {
 	sql := sqlReplaceAll(mysqlResetSQL)
 	return sqlCommonExecSQLAndUpdateDBVersion(p.dbHandle, strings.Split(sql, ";"), 0, false)
+}
+
+func (p *MySQLProvider) normalizeError(err error, fieldType int) error {
+	if err == nil {
+		return nil
+	}
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		switch mysqlErr.Number {
+		case 1062:
+			var message string
+			switch fieldType {
+			case fieldUsername:
+				message = util.I18nErrorDuplicatedUsername
+			case fieldIPNet:
+				message = util.I18nErrorDuplicatedIPNet
+			default:
+				message = util.I18nErrorDuplicatedName
+			}
+			return util.NewI18nError(
+				fmt.Errorf("%w: %s", ErrDuplicatedKey, err.Error()),
+				message,
+			)
+		case 1452:
+			return fmt.Errorf("%w: %s", ErrForeignKeyViolated, err.Error())
+		}
+	}
+	return err
 }

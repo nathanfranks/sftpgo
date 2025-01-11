@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -94,7 +94,7 @@ type Binding struct {
 	// Note that TLS 1.3 ciphersuites are not configurable.
 	// The supported ciphersuites names are defined here:
 	//
-	// https://github.com/golang/go/blob/master/src/crypto/tls/cipher_suites.go#L52
+	// https://github.com/golang/go/blob/master/src/crypto/tls/cipher_suites.go#L53
 	//
 	// any invalid name will be silently ignored.
 	// The order matters, the ciphers listed first will be the preferred ones.
@@ -109,6 +109,11 @@ type Binding struct {
 	// Please note that disabling the security checks you will make the FTP service vulnerable to bounce attacks
 	// on active data connections, so change the default value only if you are on a trusted/internal network
 	ActiveConnectionsSecurity int `json:"active_connections_security" mapstructure:"active_connections_security"`
+	// Set to 1 to silently ignore any client requests to perform ASCII translations via the TYPE command.
+	// That is, FTP clients can request ASCII translations, and SFTPGo will respond as the client expects,
+	// but will not actually perform the translation for either uploads or downloads. This behavior can be
+	// useful in circumstances involving older/mainframe clients and EBCDIC files.
+	IgnoreASCIITransferType int `json:"ignore_ascii_transfer_type" mapstructure:"ignore_ascii_transfer_type"`
 	// Debug enables the FTP debug mode. In debug mode, every FTP command will be logged
 	Debug   bool `json:"debug" mapstructure:"debug"`
 	ciphers []uint16
@@ -116,9 +121,6 @@ type Binding struct {
 
 func (b *Binding) setCiphers() {
 	b.ciphers = util.GetTLSCiphersFromNames(b.TLSCipherSuites)
-	if len(b.ciphers) == 0 {
-		b.ciphers = nil
-	}
 }
 
 func (b *Binding) isMutualTLSEnabled() bool {
@@ -231,19 +233,19 @@ func (b *Binding) HasProxy() bool {
 // GetTLSDescription returns the TLS mode as string
 func (b *Binding) GetTLSDescription() string {
 	if certMgr == nil {
-		return "Disabled"
+		return util.I18nFTPTLSDisabled
 	}
 	switch b.TLSMode {
 	case 1:
-		return "Explicit required"
+		return util.I18nFTPTLSExplicit
 	case 2:
-		return "Implicit"
+		return util.I18nFTPTLSImplicit
 	}
 
 	if certMgr.HasCertificate(common.DefaultTLSKeyPaidID) || certMgr.HasCertificate(b.GetAddress()) {
-		return "Plain and explicit"
+		return util.I18nFTPTLSMixed
 	}
-	return "Disabled"
+	return util.I18nFTPTLSDisabled
 }
 
 // PortRange defines a port range
@@ -265,10 +267,7 @@ type ServiceStatus struct {
 type Configuration struct {
 	// Addresses and ports to bind to
 	Bindings []Binding `json:"bindings" mapstructure:"bindings"`
-	// Greeting banner displayed when a connection first comes in
-	Banner string `json:"banner" mapstructure:"banner"`
-	// the contents of the specified file, if any, are diplayed when someone connects to the server.
-	// If set, it overrides the banner string provided by the banner option
+	// The contents of the specified file, if any, are diplayed when someone connects to the server.
 	BannerFile string `json:"banner_file" mapstructure:"banner_file"`
 	// If files containing a certificate and matching private key for the server are provided the server will accept
 	// both plain FTP an explicit FTP over TLS.

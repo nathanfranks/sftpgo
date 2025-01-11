@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -118,7 +118,7 @@ func (k *APIKey) hashKey() error {
 			if err != nil {
 				return err
 			}
-			k.Key = string(hashed)
+			k.Key = util.BytesToString(hashed)
 		} else {
 			hashed, err := argon2id.CreateHash(k.Key, argon2Params)
 			if err != nil {

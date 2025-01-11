@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -28,6 +28,8 @@ const (
 	SessionTypeOIDCToken
 	SessionTypeResetCode
 	SessionTypeOAuth2Auth
+	SessionTypeInvalidToken
+	SessionTypeWebTask
 )
 
 // Session defines a shared session persisted in the data provider
@@ -42,7 +44,7 @@ func (s *Session) validate() error {
 	if s.Key == "" {
 		return errors.New("unable to save a session with an empty key")
 	}
-	if s.Type < SessionTypeOIDCAuth || s.Type > SessionTypeOAuth2Auth {
+	if s.Type < SessionTypeOIDCAuth || s.Type > SessionTypeWebTask {
 		return fmt.Errorf("invalid session type: %v", s.Type)
 	}
 	return nil

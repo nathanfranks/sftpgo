@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -65,6 +65,7 @@ var (
 	portableS3ULPartSize               int
 	portableS3ULConcurrency            int
 	portableS3ForcePathStyle           bool
+	portableS3SkipTLSVerify            bool
 	portableGCSBucket                  string
 	portableGCSCredentialsFile         string
 	portableGCSAutoCredentials         int
@@ -111,7 +112,7 @@ $ sftpgo portable
 Please take a look at the usage below to customize the serving parameters`,
 		Run: func(_ *cobra.Command, _ []string) {
 			portableDir := directoryToServe
-			fsProvider := sdk.GetProviderByName(portableFsProvider)
+			fsProvider := dataprovider.GetProviderFromValue(convertFsProvider())
 			if !filepath.IsAbs(portableDir) {
 				if fsProvider == sdk.LocalFilesystemProvider {
 					portableDir, _ = filepath.Abs(portableDir)
@@ -195,7 +196,7 @@ Please take a look at the usage below to customize the serving parameters`,
 					fmt.Printf("Unable to read password file %q: %v", portablePasswordFile, err)
 					os.Exit(1)
 				}
-				pwd = strings.TrimSpace(string(content))
+				pwd = strings.TrimSpace(util.BytesToString(content))
 			}
 			service.SetGraceTime(graceTime)
 			service := service.Service{
@@ -226,7 +227,7 @@ Please take a look at the usage below to customize the serving parameters`,
 						},
 					},
 					FsConfig: vfs.Filesystem{
-						Provider: sdk.GetProviderByName(portableFsProvider),
+						Provider: fsProvider,
 						S3Config: vfs.S3FsConfig{
 							BaseS3FsConfig: sdk.BaseS3FsConfig{
 								Bucket:            portableS3Bucket,
@@ -240,6 +241,7 @@ Please take a look at the usage below to customize the serving parameters`,
 								UploadPartSize:    int64(portableS3ULPartSize),
 								UploadConcurrency: portableS3ULConcurrency,
 								ForcePathStyle:    portableS3ForcePathStyle,
+								SkipTLSVerify:     portableS3SkipTLSVerify,
 							},
 							AccessSecret: kms.NewPlainSecret(portableS3AccessSecret),
 						},
@@ -280,8 +282,9 @@ Please take a look at the usage below to customize the serving parameters`,
 								DisableCouncurrentReads: portableSFTPDisableConcurrentReads,
 								BufferSize:              portableSFTPDBufferSize,
 							},
-							Password:   kms.NewPlainSecret(portableSFTPPassword),
-							PrivateKey: kms.NewPlainSecret(portableSFTPPrivateKey),
+							Password:      kms.NewPlainSecret(portableSFTPPassword),
+							PrivateKey:    kms.NewPlainSecret(portableSFTPPrivateKey),
+							KeyPassphrase: kms.NewEmptySecret(),
 						},
 					},
 				},
@@ -373,6 +376,13 @@ prefix and its contents`)
 	portableCmd.Flags().IntVar(&portableS3ULConcurrency, "s3-upload-concurrency", 2, `How many parts are uploaded in
 parallel`)
 	portableCmd.Flags().BoolVar(&portableS3ForcePathStyle, "s3-force-path-style", false, `Force path style bucket URL`)
+	portableCmd.Flags().BoolVar(&portableS3SkipTLSVerify, "s3-skip-tls-verify", false, `If enabled the S3 client accepts any TLS
+certificate presented by the server and
+any host name in that certificate.
+In this mode, TLS is susceptible to
+man-in-the-middle attacks.
+This should be used only for testing.
+`)
 	portableCmd.Flags().StringVar(&portableGCSBucket, "gcs-bucket", "", "")
 	portableCmd.Flags().StringVar(&portableGCSStorageClass, "gcs-storage-class", "", "")
 	portableCmd.Flags().StringVar(&portableGCSKeyPrefix, "gcs-key-prefix", "", `Allows to restrict access to the
@@ -513,5 +523,24 @@ func getFileContents(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(contents), nil
+	return util.BytesToString(contents), nil
+}
+
+func convertFsProvider() string {
+	switch portableFsProvider {
+	case "osfs", "6": // httpfs (6) is not supported in portable mode, so return the default
+		return "0"
+	case "s3fs":
+		return "1"
+	case "gcsfs":
+		return "2"
+	case "azblobfs":
+		return "3"
+	case "cryptfs":
+		return "4"
+	case "sftpfs":
+		return "5"
+	default:
+		return portableFsProvider
+	}
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2023 Nicola Murino
+// Copyright (C) 2019 Nicola Murino
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published
@@ -23,11 +23,11 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"sync/atomic"
 	"time"
 
 	"github.com/drakkan/webdav"
-	"github.com/eikenb/pipeat"
 
 	"github.com/drakkan/sftpgo/v2/internal/common"
 	"github.com/drakkan/sftpgo/v2/internal/dataprovider"
@@ -51,7 +51,7 @@ type webDavFile struct {
 	readTried   atomic.Bool
 }
 
-func newWebDavFile(baseTransfer *common.BaseTransfer, pipeWriter *vfs.PipeWriter, pipeReader *pipeat.PipeReaderAt) *webDavFile {
+func newWebDavFile(baseTransfer *common.BaseTransfer, pipeWriter vfs.PipeWriter, pipeReader vfs.PipeReader) *webDavFile {
 	var writer io.WriteCloser
 	var reader io.ReadCloser
 	if baseTransfer.File != nil {
@@ -108,22 +108,24 @@ func (fi *webDavFileInfo) ContentType(_ context.Context) (string, error) {
 
 // Readdir reads directory entries from the handle
 func (f *webDavFile) Readdir(_ int) ([]os.FileInfo, error) {
+	return nil, webdav.ErrNotImplemented
+}
+
+// ReadDir implements the FileDirLister interface
+func (f *webDavFile) ReadDir() (webdav.DirLister, error) {
 	if !f.Connection.User.HasPerm(dataprovider.PermListItems, f.GetVirtualPath()) {
 		return nil, f.Connection.GetPermissionDeniedError()
 	}
-	entries, err := f.Connection.ListDir(f.GetVirtualPath())
+	lister, err := f.Connection.ListDir(f.GetVirtualPath())
 	if err != nil {
 		return nil, err
 	}
-	for idx, info := range entries {
-		entries[idx] = &webDavFileInfo{
-			FileInfo:    info,
-			Fs:          f.Fs,
-			virtualPath: path.Join(f.GetVirtualPath(), info.Name()),
-			fsPath:      f.Fs.Join(f.GetFsPath(), info.Name()),
-		}
-	}
-	return entries, nil
+	return &webDavDirLister{
+		DirLister:      lister,
+		fs:             f.Fs,
+		virtualDirPath: f.GetVirtualPath(),
+		fsDirPath:      f.GetFsPath(),
+	}, nil
 }
 
 // Stat the handle
@@ -445,11 +447,11 @@ func (f *webDavFile) Patch(patches []webdav.Proppatch) ([]webdav.Propstat, error
 		pstat := webdav.Propstat{}
 		for _, p := range patch.Props {
 			if status == http.StatusForbidden && !hasError {
-				if !patch.Remove && util.Contains(lastModifiedProps, p.XMLName.Local) {
-					parsed, err := parseTime(string(p.InnerXML))
+				if !patch.Remove && slices.Contains(lastModifiedProps, p.XMLName.Local) {
+					parsed, err := parseTime(util.BytesToString(p.InnerXML))
 					if err != nil {
 						f.Connection.Log(logger.LevelWarn, "unsupported last modification time: %q, err: %v",
-							string(p.InnerXML), err)
+							p.InnerXML, err)
 						hasError = true
 						continue
 					}
@@ -473,4 +475,25 @@ func (f *webDavFile) Patch(patches []webdav.Proppatch) ([]webdav.Propstat, error
 		resp = append(resp, pstat)
 	}
 	return resp, nil
+}
+
+type webDavDirLister struct {
+	vfs.DirLister
+	fs             vfs.Fs
+	virtualDirPath string
+	fsDirPath      string
+}
+
+func (l *webDavDirLister) Next(limit int) ([]os.FileInfo, error) {
+	files, err := l.DirLister.Next(limit)
+	for idx := range files {
+		info := files[idx]
+		files[idx] = &webDavFileInfo{
+			FileInfo:    info,
+			Fs:          l.fs,
+			virtualPath: path.Join(l.virtualDirPath, info.Name()),
+			fsPath:      l.fs.Join(l.fsDirPath, info.Name()),
+		}
+	}
+	return files, err
 }
